@@ -1,14 +1,14 @@
 name: Release
 
-# Version-driven auto release (idea borrowed from LocationSpoofer):
-# bump versionName in app/build.gradle.kts and push to main, and this
-# workflow tags and publishes the release by itself.
-# Tag format follows the GitHub common standard: v<versionName>
-# (e.g. v1.0.0). Store-specific naming is handled separately.
+# Run manually after bumping versionName in app/build.gradle.kts.
+# Releases use v<versionName> tags and commit-based changelogs.
 on:
-  push:
-    branches: [main]
   workflow_dispatch:
+    inputs:
+      release_notes:
+        description: '补充更新说明或升级注意事项（可选）'
+        required: false
+        type: string
 
 permissions:
   contents: write
@@ -51,27 +51,11 @@ jobs:
 
       - name: Generate changelog
         if: steps.check_version.outputs.changed == 'true'
+        env:
+          RELEASE_TAG: ${{ steps.check_version.outputs.tag }}
+          RELEASE_NOTES: ${{ inputs.release_notes }}
         run: |
-          TAG="${{ steps.check_version.outputs.tag }}"
-          NOTES="docs/releases/${{ steps.check_version.outputs.version_name }}.md"
-          if [ -f "$NOTES" ]; then
-            cp "$NOTES" changelog.txt
-            cat changelog.txt
-            exit 0
-          fi
-          PREV_TAG=$(git tag -l --sort=-v:refname | grep -vx "$TAG" | head -n 1 || echo "")
-          if [ -z "$PREV_TAG" ]; then
-            COMMITS=$(git log --no-merges --pretty=format:"%s")
-          else
-            echo "Previous tag: $PREV_TAG"
-            COMMITS=$(git log "$PREV_TAG"..HEAD --no-merges --pretty=format:"%s")
-          fi
-          echo "" > changelog.txt
-          FEATS=$(echo "$COMMITS" | grep "^feat:" | sed 's/^feat:[[:space:]]*/- /' || true)
-          FIXES=$(echo "$COMMITS" | grep "^fix:" | sed 's/^fix:[[:space:]]*/- /' || true)
-          if [ -n "$FEATS" ]; then printf "## 功能\n%s\n\n" "$FEATS" >> changelog.txt; fi
-          if [ -n "$FIXES" ]; then printf "## 修复\n%s\n\n" "$FIXES" >> changelog.txt; fi
-          if [ -z "$FEATS" ] && [ -z "$FIXES" ]; then echo "常规更新与优化" >> changelog.txt; fi
+          python3 .github/scripts/generate_changelog.py
           cat changelog.txt
 
       - name: Set up Java

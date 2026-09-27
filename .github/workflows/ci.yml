@@ -1,9 +1,6 @@
 name: CI
 
 on:
-  push:
-    branches: [main]
-  pull_request:
   workflow_dispatch:
 
 permissions:
@@ -63,7 +60,7 @@ jobs:
           path: app/build/outputs/apk/debug/app-debug.apk
 
   # Rebuilds the exact release pipeline (R8, ProGuard rules, shrinking) on
-  # every push using an ephemeral throwaway key. Catches issues like
+  # manual runs using an ephemeral throwaway key. Catches issues like
   # entry-point obfuscation that debug builds can never reveal.
   release-check:
     runs-on: ubuntu-24.04
