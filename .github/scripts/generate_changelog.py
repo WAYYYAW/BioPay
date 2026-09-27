@@ -11,12 +11,16 @@ def git(*args):
 
 
 tag = os.environ["RELEASE_TAG"]
+if not re.fullmatch(r"v\d+\.\d+\.\d+", tag):
+    raise ValueError("RELEASE_TAG must be a stable vX.Y.Z version")
+version = tuple(map(int, tag[1:].split(".")))
 repository = os.environ["GITHUB_REPOSITORY"]
 base_url = f"https://github.com/{repository}"
 # Only consider stable release tags contained in the selected branch.
 tags = git("tag", "--merged", "HEAD", "--sort=-v:refname").splitlines()
 previous = next(
-    (item for item in tags if re.fullmatch(r"v\d+\.\d+\.\d+", item) and item != tag),
+    (item for item in tags if re.fullmatch(r"v\d+\.\d+\.\d+", item)
+     and tuple(map(int, item[1:].split("."))) < version),
     None,
 )
 revision = f"{previous}..HEAD" if previous else "HEAD"

@@ -39,6 +39,7 @@ It supports payments made within WeChat and WeChat payments launched by other ap
 | Fingerprint, face, or both | Choose your preferred authentication mode |
 | Automatic password entry | Verify when the payment keyboard appears |
 | Class 1 face compatibility | Use supported face sensors without an additional compatibility module |
+| Fingerprint error handling | Skip specific WeChat fingerprint system error prompts and attempt to continue the page flow |
 | Manual fallback | Return to the payment keyboard after cancellation or an error |
 | Volume key shortcut | Cancel verification or start it again from the keyboard |
 | Local encrypted storage | Keep your password encrypted on your device; the module does not connect to the internet |
@@ -61,7 +62,7 @@ If recognition fails, you can try again. BioPay assists with password entry; WeC
 
 ## Installation and Setup
 
-**Requirements:** Android 9.0 or newer, LSPosed with LibXposed API 102 support, and an enrolled fingerprint or face. Only WeChat is currently supported.
+**Requirements:** Android 9.0 or newer, LSPosed with LibXposed API 102 support, and an enrolled fingerprint or face.
 
 1. Download and install the release APK from [Releases](https://github.com/kiriashi/BioPay/releases).
 2. Enable BioPay in LSPosed and select the WeChat scope.
@@ -70,19 +71,19 @@ If recognition fails, you can try again. BioPay assists with password entry; WeC
 5. Enter your six-digit WeChat payment password, choose fingerprint, face, or both, and verify to save.
 6. Follow the system verification prompt on your next payment.
 
-### Devices with Class 1 Face Recognition
+### Compatibility Setup for Weak Face Recognition
 
-Also enable BioPay's **System Framework (system)** scope in LSPosed, disable any separate FaceBiometricFix or similar compatibility module, and **reboot your phone**. Select face or both in BioPay settings.
+Some manufacturers classify their face recognition sensors as **Class 1** (Convenience, value 4095), which prevents **BiometricPrompt** from using them. BioPay includes a biometric strength override. If face payment does not work on your device, also enable BioPay's **System Framework (system)** scope in LSPosed and **reboot your phone** to activate it.
 
-Reboot after enabling or updating this compatibility feature; restarting WeChat alone is insufficient. For fingerprints or face sensors already supported for payment, start with just the WeChat scope.
+For fingerprint authentication and devices where face payment already works, only the WeChat scope is needed.
 
-This feature changes how the system evaluates biometric strength and may affect other apps. It does not improve the sensor's actual resistance to spoofing. Decide whether to enable it based on your device.
+Note: this compatibility feature changes how the system evaluates biometric strength and may affect other apps. It does not improve the face sensor's actual resistance to spoofing. Decide whether to enable it based on your device.
 
 ## Everyday Use
 
-- **Change authentication mode:** Open BioPay settings, select a mode, and verify to save. The sensor ultimately selected also depends on your device.
-- **Enter the password manually:** Cancel verification or press a volume key during verification to return to the keyboard.
-- **Verify again:** Press a volume key once while the payment keyboard is visible.
+- **Change authentication mode:** Open BioPay settings, select a mode, and verify to save.
+- **Enter the password manually:** Tap Cancel in the verification prompt or use the system Back navigation button.
+- **Verify again:** Press a volume key once while the payment keyboard is visible to return to biometric verification.
 - **Disable BioPay:** Turn off both fingerprint and face switches and save to return to normal password payment.
 - **Clear your password:** Long-press the clear button in settings and verify when prompted.
 
@@ -91,7 +92,7 @@ This feature changes how the system evaluates biometric strength and may affect 
 - Your password is encrypted locally. The module does not request internet permission or upload passwords or biometric information.
 - The system performs biometric recognition. BioPay decrypts and enters the password only after successful verification.
 - Face compatibility does not provide hardware-bound biometric protection for password decryption.
-- Source code is available under [AGPL-3.0](LICENSE). Releases no longer include a debug APK.
+- The source code is open under [AGPL-3.0](LICENSE) and available for review.
 
 ## Troubleshooting
 

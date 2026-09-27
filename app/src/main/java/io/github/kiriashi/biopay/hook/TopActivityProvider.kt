@@ -25,27 +25,34 @@ import android.util.Log
 object TopActivityProvider {
     private val TAG = LOG_TAG
 
-    private var kindaContextClass: Class<*>? = null
     @Volatile private var getTopActivityMethod: java.lang.reflect.Method? = null
 
+    private fun findMethod(classLoader: ClassLoader): java.lang.reflect.Method =
+        classLoader.loadClass(HookTargets.KindaContext)
+            .getDeclaredMethod("getTopActivity").apply { isAccessible = true }
+
     fun resolve(classLoader: ClassLoader) {
-        try {
-            getTopActivityMethod = null
-            kindaContextClass = classLoader.loadClass(HookTargets.KindaContext)
+        getTopActivityMethod = try {
+            findMethod(classLoader)
         } catch (e: Throwable) {
-            Log.w(TAG, "loadClass failed", e)
+            Log.w(TAG, "resolve getTopActivity failed", e)
+            null
         }
     }
 
     fun resolveFromHandles(oldHandles: List<io.github.libxposed.api.XposedInterface.HookHandle>) {
+        getTopActivityMethod = null
+        // Several hooks share a loader; avoid repeating failed lookups for each handle.
+        val triedLoaders = HashSet<ClassLoader>()
         for (handle in oldHandles) {
+            val loader = handle.executable.declaringClass.classLoader ?: continue
+            if (!triedLoaders.add(loader)) continue
             try {
-                val cl = handle.executable.declaringClass.classLoader ?: continue
-                getTopActivityMethod = null
-                kindaContextClass = cl.loadClass(HookTargets.KindaContext)
-                break
-            } catch (_: Throwable) {}
+                getTopActivityMethod = findMethod(loader)
+                return
+            } catch (_: ReflectiveOperationException) {}
         }
+        Log.w(TAG, "getTopActivity unavailable after hook reload")
     }
 
     fun reset() {
@@ -53,17 +60,10 @@ object TopActivityProvider {
     }
 
     fun getTopActivity(): Activity? {
-        val clazz = kindaContextClass ?: return null
+        // Snapshot the method so a concurrent reset cannot invalidate this invocation.
+        val method = getTopActivityMethod ?: return null
         return try {
-            if (getTopActivityMethod == null) {
-                synchronized(this) {
-                    if (getTopActivityMethod == null) {
-                        getTopActivityMethod = clazz.getDeclaredMethod("getTopActivity").apply { isAccessible = true }
-                    }
-                }
-            }
-            val result = getTopActivityMethod!!.invoke(null)
-            if (result is Activity) result else null
+            method.invoke(null) as? Activity
         } catch (e: Throwable) {
             Log.w(TAG, "getTopActivity failed", e)
             null

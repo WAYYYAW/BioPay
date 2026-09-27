@@ -32,6 +32,7 @@ internal class FingerprintErrorRecovery(private val onFailure: (Throwable) -> Un
     ): Boolean {
         if (!enabled || message !is String || message !in MESSAGES) return false
         var owner: Any? = null
+        var claimed = false
         try {
             owner = currentActivity() ?: return true
             synchronized(continuedActivities) {
@@ -41,10 +42,13 @@ internal class FingerprintErrorRecovery(private val onFailure: (Throwable) -> Un
             // Mark before invoking: the callback can synchronously show the same tip again.
             synchronized(continuedActivities) {
                 if (continuedActivities.put(owner, true) != null) return true
+                claimed = true
             }
             action()
         } catch (e: Throwable) {
-            synchronized(continuedActivities) { continuedActivities.remove(owner) }
+            if (claimed) {
+                synchronized(continuedActivities) { continuedActivities.remove(owner) }
+            }
             onFailure(e)
         }
         // Match FingerPay: even if continuation is unavailable, suppress this known tip.
