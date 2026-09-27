@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="docs/images/app-icon.png" width="160" alt="BioPay app icon" />
+<img src="images/app-icon.png" width="160" alt="BioPay app icon" />
 
 <h1>BioPay</h1>
 
@@ -24,12 +24,12 @@
 
 **BioPay** lets you verify your fingerprint or face to enter your WeChat payment password automatically, including on devices where WeChat does not offer biometric payment.
 
-It supports payments within WeChat and WeChat payments opened by other apps, with compatibility for some devices that only support Class 1 face recognition. Availability depends on your phone, enrolled biometrics, and WeChat version.
+It supports payments made within WeChat and WeChat payments launched by other apps. By combining strong fingerprint authentication with weak face authentication, BioPay works across devices from different manufacturers.
 
 ## Screenshots
 
 <p align="center">
-  <img src="docs/images/settings.png" width="300" alt="BioPay settings: authentication mode and payment password" />
+  <img src="images/settings.png" width="300" alt="BioPay settings: authentication mode and payment password" />
 </p>
 
 ## Features

@@ -32,16 +32,22 @@ object HookManager {
         PullDownHook.register(classLoader, xposed, state)
         KeyboardWindowHook.register(classLoader, xposed, state)
         VolumeKeyHook.register(xposed, state)
+        FingerprintErrorHook.register(classLoader, xposed, state)
     }
 
-    fun replaceHooksFromOldGeneration(oldHandles: List<XposedInterface.HookHandle>, state: AppState) {
+    fun replaceHooksFromOldGeneration(oldHandles: List<XposedInterface.HookHandle>, xposed: XposedInterface, state: AppState) {
+        TopActivityProvider.resolveFromHandles(oldHandles)
         for (handle in oldHandles) {
             when (handle.id) {
                 "bp_app_oncreate" -> handle.unhook()
                 PullDownHook.HOOK_ID -> handle.replaceHook(PullDownHook.makeInterceptor(state))
                 KeyboardWindowHook.HOOK_ID -> handle.replaceHook(KeyboardWindowHook.makeInterceptor(state))
                 VolumeKeyHook.HOOK_ID -> handle.replaceHook(VolumeKeyHook.makeInterceptor(state))
+                FingerprintErrorHook.HOOK_ID -> handle.replaceHook(FingerprintErrorHook.makeInterceptor(xposed, state))
             }
+        }
+        if (oldHandles.none { it.id == FingerprintErrorHook.HOOK_ID }) {
+            state.app.classLoader?.let { FingerprintErrorHook.register(it, xposed, state) }
         }
         Log.d(TAG, "replaceHooksFromOldGeneration: ${oldHandles.size} handles processed")
     }

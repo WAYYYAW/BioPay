@@ -98,7 +98,7 @@ class BioPayModule : XposedModule() {
         if (app != null) {
             wiring.destroy()
             val state = wiring.init(app)
-            HookManager.replaceHooksFromOldGeneration(param.oldHookHandles, state)
+            HookManager.replaceHooksFromOldGeneration(param.oldHookHandles, this, state)
             BiometricPaymentController.reset()
             initializedApplication = app
             lifecycleCallbacks = AppLifecycleCallbacks(state).also(app::registerActivityLifecycleCallbacks)

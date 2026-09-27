@@ -30,6 +30,7 @@ object TopActivityProvider {
 
     fun resolve(classLoader: ClassLoader) {
         try {
+            getTopActivityMethod = null
             kindaContextClass = classLoader.loadClass(HookTargets.KindaContext)
         } catch (e: Throwable) {
             Log.w(TAG, "loadClass failed", e)
@@ -40,6 +41,7 @@ object TopActivityProvider {
         for (handle in oldHandles) {
             try {
                 val cl = handle.executable.declaringClass.classLoader ?: continue
+                getTopActivityMethod = null
                 kindaContextClass = cl.loadClass(HookTargets.KindaContext)
                 break
             } catch (_: Throwable) {}
@@ -56,7 +58,7 @@ object TopActivityProvider {
             if (getTopActivityMethod == null) {
                 synchronized(this) {
                     if (getTopActivityMethod == null) {
-                        getTopActivityMethod = clazz.getDeclaredMethod("getTopActivity")
+                        getTopActivityMethod = clazz.getDeclaredMethod("getTopActivity").apply { isAccessible = true }
                     }
                 }
             }
