@@ -29,14 +29,12 @@ object HookManager {
 
     fun init(classLoader: ClassLoader, xposed: XposedInterface, state: AppState) {
         Log.d(TAG, "HookManager.init classLoader=${classLoader.javaClass.name}@${Integer.toHexString(classLoader.hashCode())}")
-        TopActivityProvider.resolve(classLoader)
         PullDownHook.register(classLoader, xposed, state)
         KeyboardWindowHook.register(classLoader, xposed, state)
         VolumeKeyHook.register(xposed, state)
     }
 
     fun replaceHooksFromOldGeneration(oldHandles: List<XposedInterface.HookHandle>, state: AppState) {
-        TopActivityProvider.resolveFromHandles(oldHandles)
         for (handle in oldHandles) {
             when (handle.id) {
                 "bp_app_oncreate" -> handle.unhook()

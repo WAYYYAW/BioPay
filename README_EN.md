@@ -4,15 +4,14 @@
 
 <h1>BioPay</h1>
 
-<p>为支付应用开启原生般的生物识别认证体验</p>
-<p>Native-like biometric payment for WeChat, via LSPosed</p>
+<p>验证指纹或面容，轻松完成微信支付</p>
+<p>Pay in WeChat with your fingerprint or face</p>
 
 [![Release](https://img.shields.io/github/v/release/kiriashi/BioPay?style=flat)](https://github.com/kiriashi/BioPay/releases)
 [![Stars](https://img.shields.io/github/stars/kiriashi/BioPay?style=flat)](https://github.com/kiriashi/BioPay/stargazers)
 [![Downloads](https://img.shields.io/github/downloads/kiriashi/BioPay/total?style=flat)](https://github.com/kiriashi/BioPay/releases)
 [![License](https://img.shields.io/github/license/kiriashi/BioPay?style=flat)](LICENSE)
 [![Android](https://img.shields.io/badge/Android-9.0%2B-green.svg?style=flat)](https://developer.android.com)
-[![Kotlin](https://img.shields.io/badge/Kotlin-2.1-purple.svg?style=flat)](https://kotlinlang.org)
 [![LSPosed](https://img.shields.io/badge/LSPosed-API%20102-purple.svg?style=flat)](https://github.com/LSPosed/LSPosed)
 [![Telegram](https://img.shields.io/badge/Telegram-交流群-blue.svg?style=flat)](https://t.me/biopaychat)
 
@@ -20,192 +19,88 @@
 
 </div>
 
+
 ## Introduction
 
-WeChat does not offer fingerprint/face payment on some devices, forcing a
-manual 6-digit password entry every time. On devices with untrusted TEE
-(e.g. some OnePlus phones), a "system error" style prompt can additionally
-interrupt the payment flow.
+**BioPay** lets you verify your fingerprint or face to enter your WeChat payment password automatically, including on devices where WeChat does not offer biometric payment.
 
-**BioPay** is a WeChat biometric payment module based on LSPosed (LibXposed
-API 102): once fingerprint/face authentication passes, the payment password
-is typed automatically, with a weak-face compatibility mode for older
-devices — a near-native experience.
+It supports payments within WeChat and WeChat payments opened by other apps, with compatibility for some devices that only support Class 1 face recognition. Availability depends on your phone, enrolled biometrics, and WeChat version.
 
 ## Screenshots
 
 <p align="center">
-  <img src="docs/images/settings.png" width="300" alt="Module settings: biometric toggles and payment password" />
+  <img src="docs/images/settings.png" width="300" alt="BioPay settings: authentication mode and payment password" />
 </p>
 
 ## Features
 
-```
-┌───────────────────────────────────────────────┐
-│                    BioPay                     │
-│     Native-like biometric payment for WeChat  │
-└───────────────────────────────────────────────┘
-        │                  │                  │
-        ▼                  ▼                  ▼
- 【Auth & input】     【Keyboard aware】   【Settings & storage】
- • Fingerprint/face   • Verify on keyboard • Long-press Settings
- • Weak-face compat     pop-up               to open settings
- • Volume-key retrigger • Human-like Gaussian • AES-GCM in Keystore
-                        touch timing         • Logs off by default
-                        • Fallback keyboard
-```
+| Feature | What you can do |
+| --- | --- |
+| Fingerprint, face, or both | Choose your preferred authentication mode |
+| Automatic password entry | Verify when the payment keyboard appears |
+| Class 1 face compatibility | Use supported face sensors without an additional compatibility module |
+| Manual fallback | Return to the payment keyboard after cancellation or an error |
+| Volume key shortcut | Cancel verification or start it again from the keyboard |
+| Local encrypted storage | Keep your password encrypted on your device; the module does not connect to the internet |
 
-- Fingerprint and face payment, with a weak-face compatibility mode covering
-  a wider range of Android 9.0+ devices.
-- Covers both in-WeChat payments and WeChat payments launched from external apps.
-- Volume key instantly re-triggers biometric authentication, no keyboard taps needed.
-- `Me → Settings → long-press "Settings"` opens the module settings page,
-  where you store the 6-digit payment password and pick biometric methods.
+## Payment Flow
 
-## Architecture
-
-The module is split into 6 packages with one-way downward dependencies;
-`core` has zero project dependencies:
-
-| Package | Responsibility |
-|---|---|
-| `entry` | Xposed entry `BioPayModule` + composition root `AppWiring` + lifecycle callbacks |
-| `payment` | Biometric payment feature: orchestrator, auth gate, auto input, keyboard cloaking, sessions |
-| `hook` | WeChat hooks: three interceptors, top-activity lookup, field store |
-| `settings` | Settings page: pure UI, business controller, dialog host, custom M3 widgets |
-| `data` | Data layer: AES-GCM crypto, password version policy, preference store |
-| `core` | Foundation: log capture, XOR codec, Activity/dp extensions |
-
-```
-WeChat process                BioPay module
-┌─────────┐  setInputEditText  ┌──────────────────────┐
-│ Payment ├─────────────────►│ KeyboardWindowHook   │
-│ keyboard│                   └──────────┬───────────┘
-└─────────┘                              ▼
-                              ┌──────────────────────┐
-                              │ BiometricPayment-    │
-                              │ Controller → Gate    │──► System biometric dialog
-                              └──────────┬───────────┘
-                                         │ on success
-                                         ▼
-                              ┌──────────────────────┐
-                              │ PasswordAutoInput    │──► Gaussian fake touches
-                              │ (Keystore decrypt →  │    typed digit by digit
-                              │  type chars)         │
-                              └──────────────────────┘
+```mermaid
+flowchart TD
+    A[WeChat payment keyboard appears] --> B[System biometric verification]
+    B --> C{Result}
+    C -->|Success| D[Enter payment password automatically]
+    C -->|Cancelled or error| E[Restore payment keyboard]
+    E --> F[Enter password manually]
+    E -->|Press a volume key| B
+    D --> G[WeChat continues processing the payment]
+    F --> G
 ```
 
-## How It Works
+If recognition fails, you can try again. BioPay assists with password entry; WeChat determines whether the payment succeeds.
 
-1. Store the 6-digit payment password on the settings page; it is encrypted
-   with AES-GCM into the AndroidKeystore.
-2. When the WeChat payment keyboard pops up, the module shows the system
-   biometric dialog.
-3. On success the password is decrypted and typed via human-like Gaussian
-   fake touches, digit by digit.
-4. On failure or cancel, it falls back to the normal keyboard; normal
-   payment is unaffected.
+## Installation and Setup
 
-Honest note: for weak-face compatibility, biometrics act as an
-application-level gate here rather than a biometric-bound `CryptoObject`
-(weak face cannot authorize one on some devices). Please review the code
-before deciding to trust this module.
+**Requirements:** Android 9.0 or newer, LSPosed with LibXposed API 102 support, and an enrolled fingerprint or face. Only WeChat is currently supported.
 
-## Usage
+1. Download and install the release APK from [Releases](https://github.com/kiriashi/BioPay/releases).
+2. Enable BioPay in LSPosed and select the WeChat scope.
+3. Force-stop WeChat, then open it again.
+4. Go to WeChat **Me → Settings**, then long-press the page title **Settings** to open BioPay settings.
+5. Enter your six-digit WeChat payment password, choose fingerprint, face, or both, and verify to save.
+6. Follow the system verification prompt on your next payment.
 
-1. Download the latest APK from [Releases](https://github.com/kiriashi/BioPay/releases) and install it.
-2. Enable BioPay in the LSPosed manager with scope `com.tencent.mm`
-   (WeChat); LSPosed with LibXposed API 102 support is required.
-3. Restart WeChat (restart the scope in LSPosed, or force-stop and reopen).
-4. Open WeChat `Me → Settings` and long-press "Settings" to open the module page.
-5. Store the payment password, enable fingerprint/face, and complete one
-   biometric verification when saving.
+### Devices with Class 1 Face Recognition
 
-Requirements: Android 9.0+, with fingerprint or face enrolled on the device.
+Also enable BioPay's **System Framework (system)** scope in LSPosed, disable any separate FaceBiometricFix or similar compatibility module, and **reboot your phone**. Select face or both in BioPay settings.
 
-## Green Credentials
+Reboot after enabling or updating this compatibility feature; restarting WeChat alone is insufficient. For fingerprints or face sensors already supported for payment, start with just the WeChat scope.
 
-- **Single permission**: only `USE_BIOMETRIC`; no `INTERNET`, storage,
-  notification or any other permission.
-- **Zero network**: not a single line of networking code; the module itself
-  makes no network connections at runtime.
-- **Zero third-party libraries**: only system APIs plus our own code inside
-  the APK (`libxposed` is compile-time only and not packaged).
-- **No backdoors**: no malicious code — zero components, single
-  permission, zero networking, fully open source and auditable.
-- **Logs off by default**: debug logging is opt-in and only ever written to
-  the app-private directory on the device, never uploaded.
-- **Fully open and verifiable**: AGPL-3.0, every Release ships debug APK
-  and full source archives alongside the release APK; you can also rebuild
-  from the tag to verify from source.
-  Every line of code is open to review.
+This feature changes how the system evaluates biometric strength and may affect other apps. It does not improve the sensor's actual resistance to spoofing. Decide whether to enable it based on your device.
 
-## Tech Stack
+## Everyday Use
 
-- **Language**: 100% Kotlin (JVM 17 target, 21 toolchain).
-- **UI**: hand-drawn Material 3 widgets on classic Views (`settings/ui`),
-  no Compose, no third-party UI libraries.
-- **Xposed**: LSPosed LibXposed API 102, hooks live in the `hook` package.
-- **Encrypted storage**: AndroidKeystore AES-GCM with a forward-compatible
-  password version policy.
-- **Tests**: JUnit 4 unit tests over pure-logic units (`test/` mirrors the
-  `main/` package layout).
-- **Build**: Gradle + R8, fully automated CI/Release via GitHub Actions.
+- **Change authentication mode:** Open BioPay settings, select a mode, and verify to save. The sensor ultimately selected also depends on your device.
+- **Enter the password manually:** Cancel verification or press a volume key during verification to return to the keyboard.
+- **Verify again:** Press a volume key once while the payment keyboard is visible.
+- **Disable BioPay:** Turn off both fingerprint and face switches and save to return to normal password payment.
+- **Clear your password:** Long-press the clear button in settings and verify when prompted.
 
-## Compatibility & Feedback
+## Privacy and Security
 
-If a WeChat update breaks the module, please file an issue with the WeChat
-version, Android version and LSPosed version, or join the
-[Telegram group](https://t.me/biopaychat). Only use this module on
-devices and accounts you are authorized to modify.
+- Your password is encrypted locally. The module does not request internet permission or upload passwords or biometric information.
+- The system performs biometric recognition. BioPay decrypts and enters the password only after successful verification.
+- Face compatibility does not provide hardware-bound biometric protection for password decryption.
+- Source code is available under [AGPL-3.0](LICENSE). Releases no longer include a debug APK.
 
-## Roadmap (TODO)
+## Troubleshooting
 
-- The current version targets WeChat (`com.tencent.mm`) only; other payment
-  apps (Alipay, UnionPay, …) are not adapted yet.
+Check that the module and required scopes are enabled, your biometrics are enrolled, and you have rebooted after updating. If a WeChat update breaks the feature, report your phone model, Android, WeChat, and LSPosed versions, steps to reproduce, and error messages in [Issues](https://github.com/kiriashi/BioPay/issues). Never share your payment password.
 
-## Build
+You can also join the [Telegram group](https://t.me/biopaychat).
 
-Debug build:
+## License and Disclaimer
 
-```bash
-./gradlew assembleDebug
-```
+Copyright (C) 2026 kiriashi. Licensed under the [GNU Affero General Public License v3.0 or later](LICENSE). Modifications and redistribution must comply with the license.
 
-Signed release builds take key material from environment variables
-(CI secrets) or an untracked `local.properties` file:
-
-```text
-BIOPAY_RELEASE_STORE_FILE
-BIOPAY_RELEASE_STORE_PASSWORD
-BIOPAY_RELEASE_KEY_ALIAS
-BIOPAY_RELEASE_KEY_PASSWORD
-```
-
-```properties
-# local.properties (never commit this file)
-RELEASE_STORE_FILE=../biopay.keystore
-RELEASE_STORE_PASSWORD=<keystore password>
-RELEASE_KEY_ALIAS=<key alias>
-RELEASE_KEY_PASSWORD=<key password>
-```
-
-Without key material the build gracefully falls back to an unsigned APK
-(`app-release-unsigned.apk`) instead of failing. Personal keystores must
-never be committed to the repository.
-
-## License
-
-Copyright (C) 2026 kiriashi.
-
-BioPay is free software licensed under the GNU Affero General Public License v3.0 (or any later version). See [LICENSE](LICENSE).
-
-You may redistribute and modify it under the terms of the AGPL-3.0. Any distributed or network-deployed modifications must also be released under the AGPL-3.0 with the corresponding source code. There is no warranty.
-
-## Disclaimer
-
-This program is for study, research, technical exchange and personal lawful
-testing only. Do not use it for anything illegal or against any platform's
-terms of service. You bear all consequences of using this module, including
-account bans, data loss, legal disputes or any other direct/indirect damage;
-the author accepts no liability.
+Use only on devices and accounts you are authorized to use and modify, and follow applicable laws and platform rules. This project provides no warranty. You are responsible for account, data, and payment risks arising from its use.

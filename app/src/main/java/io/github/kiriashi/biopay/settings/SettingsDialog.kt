@@ -29,7 +29,6 @@ import io.github.kiriashi.biopay.settings.ui.M3Field
 import io.github.kiriashi.biopay.settings.ui.M3Switch
 import io.github.kiriashi.biopay.settings.ui.Theme
 import io.github.kiriashi.biopay.settings.ui.ThemeColors
-import android.app.Activity
 import android.content.Context
 import android.content.Intent
 import android.content.res.ColorStateList
@@ -54,10 +53,9 @@ object SettingsDialog {
 
     fun show(context: Context, state: AppState) {
         if (!context.isValidActivity()) return
-        val activity = context as? Activity ?: return
         val dialogHost = DialogHost(context)
         val layout = createDialogContent(context, dialogHost, state)
-        dialogHost.onDismiss = { state.fields.removeField(activity, FieldStore.SETTINGS_DIALOG) }
+        dialogHost.onDismiss = { state.fields.removeField(context, FieldStore.SETTINGS_DIALOG) }
         dialogHost.show(layout)
     }
 
@@ -123,7 +121,8 @@ object SettingsDialog {
         clearBtn.setOnLongClickListener {
             it.performHapticFeedback(android.view.HapticFeedbackConstants.LONG_PRESS)
             SettingsController.authenticateWithBiometric(context, dialogHost, state, "清除密码，生物支付已关闭") {
-                SettingsController.handleClearPassword(context, dialogHost, state)
+                SettingsController.handleClearPassword(state)
+                true
             }
             true
         }

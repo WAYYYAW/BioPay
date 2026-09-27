@@ -23,19 +23,21 @@ import java.util.concurrent.atomic.AtomicLong
 
 internal class SessionToken {
     private val nextId = AtomicLong(0)
-    @Volatile private var currentId = 0L
+    private val currentId = AtomicLong(0)
 
     fun begin(): Long {
         val id = nextId.incrementAndGet()
-        currentId = id
+        currentId.set(id)
         return id
     }
 
-    fun current(): Long = currentId
+    fun current(): Long = currentId.get()
 
-    fun isCurrent(id: Long): Boolean = id != 0L && currentId == id
+    fun isCurrent(id: Long): Boolean = id != 0L && currentId.get() == id
+
+    fun finish(id: Long): Boolean = id != 0L && currentId.compareAndSet(id, 0L)
 
     fun invalidate() {
-        currentId = 0L
+        currentId.set(0L)
     }
 }

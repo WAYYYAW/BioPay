@@ -25,8 +25,10 @@ import io.github.kiriashi.biopay.data.crypto.PasswordVersionPolicy
 import io.github.kiriashi.biopay.hook.FieldStore
 import io.github.kiriashi.biopay.lifecycle.AppState
 import io.github.kiriashi.biopay.payment.BiometricType
+import io.github.kiriashi.biopay.payment.BiometricPromptPolicy
 import io.github.kiriashi.biopay.settings.ui.M3Field
 import android.content.Context
+import android.os.CancellationSignal
 import android.hardware.biometrics.BiometricPrompt
 import android.widget.Toast
 
@@ -41,8 +43,7 @@ object SettingsController {
 
     fun handleSave(context: Context, dialogHost: DialogHost, pwdInput: M3Field, state: AppState, selectedType: Int) {
         if (selectedType == BiometricType.DISABLED) {
-            state.prefs.setBioPayEnabled(false)
-            state.prefs.saveBiometricType(BiometricType.DISABLED)
+            state.prefs.setBiometricMode(BiometricType.DISABLED)
             dismissDialog(context, dialogHost, state)
             return
         }
@@ -55,16 +56,16 @@ object SettingsController {
                     showToast(context, "安全存储已升级，请重新输入支付密码")
                     return
                 }
-                authenticateWithBiometric(context, dialogHost, state) {
-                    state.prefs.setBioPayEnabled(true)
-                    state.prefs.saveBiometricType(selectedType)
+                authenticateWithBiometric(context, dialogHost, state, biometricType = selectedType) {
+                    state.prefs.setBiometricMode(selectedType)
+                    true
                 }
                 return
             }
             showToast(context, "请输入支付密码")
             return
         }
-        if (pwd.length != KeystoreHelper.PASSWORD_LENGTH) {
+        if (pwd.length != KeystoreHelper.PASSWORD_LENGTH || pwd.any { it !in '0'..'9' }) {
             showToast(context, "密码必须是6位数字")
             return
         }
@@ -77,21 +78,19 @@ object SettingsController {
         authenticateWithBiometric(
             context,
             dialogHost,
-            state
+            state,
+            biometricType = selectedType
         ) {
-            if (state.prefs.savePassword(pwd, encryptionCipher, expectedPasswordVersion).isFailure) {
+            if (state.prefs.savePassword(pwd, encryptionCipher, expectedPasswordVersion, selectedType).isFailure) {
                 showToast(context, "密码加密失败，请重试")
-                return@authenticateWithBiometric
+                return@authenticateWithBiometric false
             }
-            state.prefs.saveBiometricType(selectedType)
+            true
         }
     }
 
-    fun handleClearPassword(context: Context, dialogHost: DialogHost, state: AppState) {
+    fun handleClearPassword(state: AppState) {
         state.prefs.clearPassword()
-        state.prefs.setBioPayEnabled(false)
-        state.prefs.saveBiometricType(BiometricType.DISABLED)
-        dismissDialog(context, dialogHost, state)
     }
 
     fun dismissDialog(context: Context, dialogHost: DialogHost, state: AppState) {
@@ -104,35 +103,40 @@ object SettingsController {
         dialogHost: DialogHost,
         state: AppState,
         successMsg: String = "生物支付已启用",
-        onSuccess: () -> Unit
+        biometricType: Int = state.prefs.getBiometricType(),
+        onSuccess: () -> Boolean
     ) {
-        val bp = BiometricPrompt.Builder(context)
-            .setTitle("身份验证")
-            .setNegativeButton("取消", context.mainExecutor) { _, _ -> }
-            .build()
-        val callback = object : BiometricPrompt.AuthenticationCallback() {
-            override fun onAuthenticationSucceeded(r: BiometricPrompt.AuthenticationResult?) {
-                super.onAuthenticationSucceeded(r)
-                try {
-                    onSuccess()
-                    if (context.isValidActivity()) {
-                        showToast(context, successMsg)
-                    }
-                } catch (e: Throwable) {
-                    if (context.isValidActivity()) {
-                        showToast(context, "保存失败: ${e.message}")
+        if (!context.isValidActivity()) return
+        val signal = CancellationSignal()
+        val attemptId = dialogHost.beginAuthentication(signal)
+        try {
+            val builder = BiometricPrompt.Builder(context)
+                .setTitle("身份验证")
+                .setNegativeButton("取消", context.mainExecutor) { _, _ ->
+                    dialogHost.finishAuthentication(attemptId)
+                }
+            val callback = object : BiometricPrompt.AuthenticationCallback() {
+                override fun onAuthenticationSucceeded(r: BiometricPrompt.AuthenticationResult?) {
+                    if (!dialogHost.finishAuthentication(attemptId) || !context.isValidActivity()) return
+                    try {
+                        if (onSuccess()) {
+                            showToast(context, successMsg)
+                            dismissDialog(context, dialogHost, state)
+                        }
+                    } catch (e: Throwable) {
+                        showToast(context, "保存失败，请重试")
                     }
                 }
-                dismissDialog(context, dialogHost, state)
-            }
-            override fun onAuthenticationError(code: Int, msg: CharSequence?) {
-                super.onAuthenticationError(code, msg)
-                if (msg != null && context.isValidActivity()) {
-                    showToast(context, msg.toString())
+                override fun onAuthenticationError(code: Int, msg: CharSequence?) {
+                    if (!dialogHost.finishAuthentication(attemptId)) return
+                    if (msg != null && context.isValidActivity()) showToast(context, msg.toString())
                 }
             }
+            BiometricPromptPolicy.configure(builder, biometricType).build()
+                .authenticate(signal, context.mainExecutor, callback)
+        } catch (e: Throwable) {
+            if (dialogHost.finishAuthentication(attemptId)) showToast(context, "无法启动身份验证，请重试")
         }
-        bp.authenticate(state.session.createNewSignal(), context.mainExecutor, callback)
     }
 
     fun showToast(context: Context, msg: String) {
@@ -146,7 +150,11 @@ object SettingsController {
             return "日志捕获已开启"
         }
         state.prefs.setLogCaptureEnabled(false)
-        val path = LogCapture.stop(context)
-        return if (path != null) "日志已保存到: $path" else "日志捕获已关闭"
+        LogCapture.stop(context) { path ->
+            if (context.isValidActivity()) {
+                showToast(context, if (path != null) "日志已保存到: $path" else "日志保存未完成")
+            }
+        }
+        return "日志捕获已关闭"
     }
 }

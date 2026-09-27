@@ -46,21 +46,22 @@ object VolumeKeyHook {
             try {
                 if (state.session.isInPaymentMode()) {
                     val event = chain.args[0] as? KeyEvent
-                    if (event?.action == KeyEvent.ACTION_DOWN) {
+                    if (event != null) {
                         val keyCode = event.keyCode
                         if (keyCode == KeyEvent.KEYCODE_VOLUME_UP || keyCode == KeyEvent.KEYCODE_VOLUME_DOWN) {
                             Log.d(TAG, "volume key intercepted: $keyCode, triggering toggle")
                             LogCapture.log("volume key: $keyCode")
-                            BiometricPaymentController.toggleBetweenBiometricAndKeyboard(state)
+                            if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) {
+                                BiometricPaymentController.toggleBetweenBiometricAndKeyboard(state)
+                            }
                             return@Hooker true
                         }
                     }
                 }
-                chain.proceed()
             } catch (e: Throwable) {
                 Log.w(TAG, "volumeKey interceptor failed", e)
-                chain.proceed()
             }
+            chain.proceed()
         }
     }
 }

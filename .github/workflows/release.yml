@@ -53,6 +53,12 @@ jobs:
         if: steps.check_version.outputs.changed == 'true'
         run: |
           TAG="${{ steps.check_version.outputs.tag }}"
+          NOTES="docs/releases/${{ steps.check_version.outputs.version_name }}.md"
+          if [ -f "$NOTES" ]; then
+            cp "$NOTES" changelog.txt
+            cat changelog.txt
+            exit 0
+          fi
           PREV_TAG=$(git tag -l --sort=-v:refname | grep -vx "$TAG" | head -n 1 || echo "")
           if [ -z "$PREV_TAG" ]; then
             COMMITS=$(git log --no-merges --pretty=format:"%s")
@@ -88,7 +94,7 @@ jobs:
           test -n "$BIOPAY_RELEASE_KEYSTORE_BASE64"
           printf '%s' "$BIOPAY_RELEASE_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/biopay-release.keystore"
 
-      - name: Build release and debug APKs
+      - name: Build signed release APK
         if: steps.check_version.outputs.changed == 'true'
         env:
           BIOPAY_RELEASE_STORE_FILE: ${{ runner.temp }}/biopay-release.keystore
@@ -96,10 +102,9 @@ jobs:
           BIOPAY_RELEASE_KEY_ALIAS: ${{ secrets.BIOPAY_RELEASE_KEY_ALIAS }}
           BIOPAY_RELEASE_KEY_PASSWORD: ${{ secrets.BIOPAY_RELEASE_KEY_PASSWORD }}
         run: |
-          ./gradlew assembleRelease assembleDebug
+          ./gradlew assembleRelease
           APK_DIR="app/build/outputs/apk"
           mv "$APK_DIR/release/app-release.apk" "$APK_DIR/BioPay-${{ steps.check_version.outputs.tag }}.apk"
-          mv "$APK_DIR/debug/app-debug.apk" "$APK_DIR/BioPay-${{ steps.check_version.outputs.tag }}-debug.apk"
           ls -lh "$APK_DIR"
 
       - name: Verify release APK
@@ -135,4 +140,3 @@ jobs:
           body_path: changelog.txt
           files: |
             app/build/outputs/apk/BioPay-${{ steps.check_version.outputs.tag }}.apk
-            app/build/outputs/apk/BioPay-${{ steps.check_version.outputs.tag }}-debug.apk

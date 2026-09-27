@@ -43,14 +43,15 @@ object KeyboardWindowHook {
     }
     fun makeInterceptor(state: AppState): XposedInterface.Hooker {
         return XposedInterface.Hooker { chain ->
+            val result = chain.proceed()
             try {
                 if (!state.prefs.isBioPayEnabled()) {
-                    return@Hooker chain.proceed()
+                    return@Hooker result
                 }
 
                 val encodedPassword = state.prefs.getEncodedPassword()
                 if (encodedPassword.isNullOrEmpty()) {
-                    return@Hooker chain.proceed()
+                    return@Hooker result
                 }
 
                 val inputEditText = chain.args[0] as? EditText
@@ -60,15 +61,14 @@ object KeyboardWindowHook {
 
                 val keyboardView = chain.thisObject as? ViewGroup
                 if (keyboardView != null) {
-                    Log.d(TAG, "setInputEditText intercepted, view=${keyboardView.hashCode()}, biometricInProgress=${state.fields.hasField(keyboardView.context, FieldStore.BIOMETRIC_IN_PROGRESS)}")
-                    LogCapture.log("setInputEditText: view=${keyboardView.hashCode()}, inProgress=${state.fields.hasField(keyboardView.context, FieldStore.BIOMETRIC_IN_PROGRESS)}")
+                    Log.d(TAG, "setInputEditText intercepted, view=${keyboardView.hashCode()}, biometricInProgress=${state.session.isAuthenticationInProgress()}")
+                    LogCapture.log("setInputEditText: view=${keyboardView.hashCode()}, inProgress=${state.session.isAuthenticationInProgress()}")
                     BiometricPaymentController.setupBiometricAuth(keyboardView, encodedPassword, state)
                 }
-                chain.proceed()
             } catch (e: Throwable) {
                 Log.w(TAG, "keyboardWindow interceptor failed", e)
-                chain.proceed()
             }
+            result
         }
     }
 }

@@ -18,190 +18,136 @@
  */
 package io.github.kiriashi.biopay.payment
 
+import android.hardware.biometrics.BiometricPrompt
+import android.util.Log
+import android.view.View
+import android.view.ViewGroup
+import android.view.inputmethod.InputMethodManager
 import io.github.kiriashi.biopay.core.log.LOG_TAG
 import io.github.kiriashi.biopay.core.log.LogCapture
 import io.github.kiriashi.biopay.core.util.isValidActivity
 import io.github.kiriashi.biopay.data.crypto.KeystoreHelper
-import io.github.kiriashi.biopay.hook.FieldStore
-import io.github.kiriashi.biopay.hook.TopActivityProvider
 import io.github.kiriashi.biopay.lifecycle.AppState
-import android.hardware.biometrics.BiometricManager
-import android.hardware.biometrics.BiometricPrompt
-import android.os.Build
-import android.util.Log
-import android.view.View
-import android.view.ViewGroup
 
 object BiometricGate {
-
-    private val TAG = LOG_TAG
     fun triggerBiometricAuth(
         keyboardView: ViewGroup,
         encodedPassword: String,
         state: AppState,
         sessionId: Long
     ): Boolean {
-        if (!state.session.isCurrentSession(sessionId)) return false
-        val context = keyboardView.context
-        if (!context.isValidActivity()) {
-            Log.d(TAG, "trigger: context is not valid Activity, skip"); LogCapture.log("trigger: not Activity, skip")
-            return false
-        }
-        if (!state.fields.compareAndSetField(context, FieldStore.BIOMETRIC_IN_PROGRESS, false, true)) {
-            Log.d(TAG, "trigger: FIELD_BIOMETRIC_IN_PROGRESS already set, skip"); LogCapture.log("trigger: already in progress, skip")
-            return false
-        }
-
-        val activity = TopActivityProvider.getTopActivity()
-        if (activity == null) {
-            Log.d(TAG, "trigger: topActivity null"); LogCapture.log("trigger: topActivity null")
-            clearFlagAndShowKeyboard(keyboardView, state)
-            return false
-        }
-
+        if (!state.session.isCurrentSession(sessionId) || !keyboardView.context.isValidActivity()) return false
+        if (PasswordAutoInput.isInProgress(sessionId)) return false
         val biometricType = state.prefs.getBiometricType()
-        val decryptOperation = KeystoreHelper.createDecryptOperation(encodedPassword)
-        if (decryptOperation == null) {
-            Log.d(TAG, "trigger: decrypt failed"); LogCapture.log("trigger: decrypt failed")
-            state.prefs.clearPassword()
-            clearFlagAndShowKeyboard(keyboardView, state)
+        if (biometricType !in BiometricType.BOTH..BiometricType.FACE) return false
+        val attempt = state.session.beginAuthentication() ?: return false
+        val operation = KeystoreHelper.createDecryptOperation(encodedPassword)
+        if (operation == null) {
+            state.session.finishAuthentication(attempt.id)
+            restoreKeyboard(keyboardView, state, sessionId)
             return false
         }
-
-        Log.d(TAG, "trigger: biometricType=$biometricType, showing dialog"); LogCapture.log("trigger: type=$biometricType")
-
         try {
-            val executor = context.mainExecutor
-            val builder = BiometricPrompt.Builder(context)
+            val executor = keyboardView.context.mainExecutor
+            val builder = BiometricPrompt.Builder(keyboardView.context)
                 .setTitle("身份验证")
                 .setNegativeButton("取消", executor) { _, _ ->
-                    Log.d(TAG, "negative button clicked, executing cleanup directly"); LogCapture.log("negative button clicked")
-                    decryptOperation.ciphertext.fill(0)
-                    if (state.fields.compareAndSetField(keyboardView.context, FieldStore.BIOMETRIC_IN_PROGRESS, true, false)) {
-                        onBiometricError(keyboardView, state, sessionId)
+                    operation.ciphertext.fill(0)
+                    if (state.session.isCurrentSession(sessionId) && state.session.finishAuthentication(attempt.id)) {
+                        restoreKeyboard(keyboardView, state, sessionId)
                     }
                 }
-
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-                builder.setAllowedAuthenticators(
-                    if (biometricType == BiometricType.FINGERPRINT) {
-                        BiometricManager.Authenticators.BIOMETRIC_STRONG
-                    } else {
-                        BiometricManager.Authenticators.BIOMETRIC_WEAK
-                    }
-                )
-            }
-            when (biometricType) {
-                BiometricType.FINGERPRINT -> Unit
-                BiometricType.FACE -> {
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                        builder.setConfirmationRequired(false)
-                    }
-                }
-                BiometricType.BOTH -> Unit
-                else -> {
-                    Log.w(TAG, "trigger: unsupported biometricType=$biometricType"); LogCapture.log("trigger: unsupported type=$biometricType")
-                    decryptOperation.ciphertext.fill(0)
-                    clearFlagAndShowKeyboard(keyboardView, state)
-                    return false
-                }
-            }
-
-            val biometricPrompt = builder.build()
-            val signal = state.session.createNewSignal()
-            val callback = BiometricAuthCallback(keyboardView, decryptOperation, state, sessionId)
-            biometricPrompt.authenticate(signal, executor, callback)
-
-            // Keep external payment keyboards attached; GONE can recreate them and cancel auth.
+            val callback = BiometricAuthCallback(keyboardView, operation, state, sessionId, attempt.id)
+            BiometricPromptPolicy.configure(builder, biometricType).build()
+                .authenticate(attempt.signal, executor, callback)
+            if (!state.session.isCurrentAuthentication(attempt.id)) return false
+            // INVISIBLE preserves external payment keyboard attachment and the active prompt.
             keyboardView.visibility = View.INVISIBLE
-            Log.d(TAG, "trigger: keyboard INVISIBLE, dialog shown"); LogCapture.log("trigger: keyboard INVISIBLE")
+            LogCapture.log("trigger: type=$biometricType, session=$sessionId, attempt=${attempt.id}")
             return true
         } catch (e: Throwable) {
-            decryptOperation.ciphertext.fill(0)
-            Log.w(TAG, "biometric auth failed", e); LogCapture.log("trigger: failed: ${e.message}")
-            clearFlagAndShowKeyboard(keyboardView, state)
+            operation.ciphertext.fill(0)
+            if (state.session.isCurrentSession(sessionId) && state.session.finishAuthentication(attempt.id)) {
+                restoreKeyboard(keyboardView, state, sessionId)
+            }
+            Log.w(LOG_TAG, "biometric auth failed", e)
+            LogCapture.log("trigger: failed: ${e.message}")
             return false
         }
     }
 
-    private fun clearFlagAndShowKeyboard(keyboardView: ViewGroup, state: AppState) {
+    fun cancelAuthentication(state: AppState) {
+        val view = state.session.getCurrentKeyboardView() ?: return
         state.session.cancelCurrentSignal()
-        state.fields.removeField(keyboardView.context, FieldStore.BIOMETRIC_IN_PROGRESS)
-        keyboardView.visibility = View.VISIBLE
-        Log.d(TAG, "clearFlagAndShowKeyboard: keyboard VISIBLE"); LogCapture.log("clearFlag: keyboard VISIBLE")
+        restoreKeyboard(view, state, state.session.currentSessionId())
     }
 
-    private fun onBiometricSuccess(
-        callbackKeyboardView: ViewGroup,
-        passwordChars: CharArray,
-        state: AppState,
-        sessionId: Long
-    ) {
+    private fun restoreKeyboard(callbackView: ViewGroup, state: AppState, sessionId: Long) {
         if (!state.session.isCurrentSession(sessionId)) return
-        val keyboardView = state.session.getCurrentKeyboardView() ?: callbackKeyboardView
-        state.fields.removeField(keyboardView.context, FieldStore.BIOMETRIC_IN_PROGRESS)
+        val keyboardView = state.session.getCurrentKeyboardView() ?: callbackView
+        KeyboardCloak.reset()
         keyboardView.visibility = View.VISIBLE
-        KeyboardCloak.concealActivityWindow(state)
-        KeyboardCloak.cloakKeyboardViews(keyboardView)
-        PasswordAutoInput.autoInputPassword(keyboardView, passwordChars, state, sessionId)
-        state.session.setCurrentEncodedPassword(null)
-    }
-
-    private fun onBiometricError(callbackKeyboardView: ViewGroup, state: AppState, sessionId: Long) {
-        if (!state.session.isCurrentSession(sessionId)) return
-        state.session.cancelCurrentSignal()
-        val keyboardView = state.session.getCurrentKeyboardView() ?: callbackKeyboardView
-        state.fields.removeField(keyboardView.context, FieldStore.BIOMETRIC_IN_PROGRESS)
-        val inputEditText = state.session.getInputEditText()
-        KeyboardCloak.restoreConcealedInputViews()
-        if (inputEditText?.isAttachedToWindow == true) {
-            inputEditText.requestFocus()
-            inputEditText.post {
-                val inputMethodManager = inputEditText.context.getSystemService(
-                    android.content.Context.INPUT_METHOD_SERVICE
-                ) as? android.view.inputmethod.InputMethodManager
-                inputMethodManager?.showSoftInput(
-                    inputEditText,
-                    android.view.inputmethod.InputMethodManager.SHOW_IMPLICIT
-                )
+        val input = state.session.getInputEditText()
+        if (input?.isAttachedToWindow == true) {
+            input.requestFocus()
+            input.post {
+                if (state.session.isCurrentSession(sessionId) && input.isAttachedToWindow) {
+                    val manager = input.context.getSystemService(android.content.Context.INPUT_METHOD_SERVICE)
+                        as? InputMethodManager
+                    manager?.showSoftInput(input, InputMethodManager.SHOW_IMPLICIT)
+                }
             }
         }
-        Log.d(TAG, "onBiometricError: callbackView=${callbackKeyboardView.hashCode()} finalView=${keyboardView.hashCode()}")
-        LogCapture.log("onBiometricError: finalView=${keyboardView.hashCode()}")
-        KeyboardCloak.uncloakKeyboardViews(keyboardView)
-        keyboardView.visibility = View.VISIBLE
-        Log.d(TAG, "onBiometricError: keyboard VISIBLE done"); LogCapture.log("onBiometricError: keyboard VISIBLE")
+        LogCapture.log("auth: keyboard restored, session=$sessionId")
     }
 
-private class BiometricAuthCallback(
+    private class BiometricAuthCallback(
         private val keyboardView: ViewGroup,
-        private val decryptOperation: KeystoreHelper.DecryptOperation,
+        private val operation: KeystoreHelper.DecryptOperation,
         private val state: AppState,
-        private val sessionId: Long
+        private val sessionId: Long,
+        private val attemptId: Long
     ) : BiometricPrompt.AuthenticationCallback() {
-
         override fun onAuthenticationError(errorCode: Int, errString: CharSequence?) {
-            Log.d(TAG, "onAuthenticationError: code=$errorCode"); LogCapture.log("onAuthError: code=$errorCode")
-            decryptOperation.ciphertext.fill(0)
-            onBiometricError(keyboardView, state, sessionId)
+            operation.ciphertext.fill(0)
+            if (!state.session.isCurrentSession(sessionId) || !state.session.finishAuthentication(attemptId)) return
+            LogCapture.log("onAuthError: code=$errorCode, attempt=$attemptId")
+            restoreKeyboard(keyboardView, state, sessionId)
         }
 
         override fun onAuthenticationFailed() {
-            Log.d(TAG, "onAuthenticationFailed"); LogCapture.log("onAuthFailed")
+            if (state.session.isCurrentSession(sessionId) && state.session.isCurrentAuthentication(attemptId)) {
+                LogCapture.log("onAuthFailed: attempt=$attemptId")
+            }
         }
 
         override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult?) {
-            Log.d(TAG, "onAuthenticationSucceeded"); LogCapture.log("onAuthSucceeded")
+            if (!state.session.isCurrentSession(sessionId) || !state.session.finishAuthentication(attemptId)) {
+                operation.ciphertext.fill(0)
+                return
+            }
+            LogCapture.log("onAuthSucceeded: attempt=$attemptId")
+            var password: CharArray? = null
             try {
-                val passwordChars = KeystoreHelper.decryptToCharArray(decryptOperation)
-                if (passwordChars == null) {
-                    state.prefs.clearPassword()
-                    onBiometricError(keyboardView, state, sessionId)
+                password = KeystoreHelper.decryptToCharArray(operation)
+                if (password == null) {
+                    restoreKeyboard(keyboardView, state, sessionId)
                     return
                 }
-                onBiometricSuccess(keyboardView, passwordChars, state, sessionId)
+                val currentView = state.session.getCurrentKeyboardView() ?: keyboardView
+                currentView.visibility = View.VISIBLE
+                PasswordAutoInput.cancelPendingRunnables()
+                KeyboardCloak.concealActivityWindow(state)
+                KeyboardCloak.cloakKeyboardViews(currentView)
+                if (!PasswordAutoInput.autoInputPassword(currentView, password, state, sessionId)) {
+                    restoreKeyboard(currentView, state, sessionId)
+                }
+            } catch (e: Throwable) {
+                Log.w(LOG_TAG, "post-authentication input failed", e)
+                restoreKeyboard(keyboardView, state, sessionId)
             } finally {
-                decryptOperation.ciphertext.fill(0)
+                password?.fill('\u0000')
+                operation.ciphertext.fill(0)
             }
         }
     }

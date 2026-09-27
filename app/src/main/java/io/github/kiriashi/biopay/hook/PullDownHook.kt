@@ -21,6 +21,7 @@ package io.github.kiriashi.biopay.hook
 import io.github.kiriashi.biopay.core.log.LOG_TAG
 import io.github.kiriashi.biopay.lifecycle.AppState
 import io.github.kiriashi.biopay.settings.SettingsDialog
+import io.github.kiriashi.biopay.core.util.isValidActivity
 import android.util.Log
 import android.view.View
 import android.view.ViewGroup
@@ -51,18 +52,22 @@ object PullDownHook {
         return XposedInterface.Hooker { chain ->
             try {
                 val view = chain.args[1] as? View
-                if (view != null && containsSettingsText(view)) {
+                if (view != null && view.context.isValidActivity() && containsSettingsText(view)) {
                     val ctx = view.context
-                    if (ctx != null && state.fields.compareAndSetField(ctx, FieldStore.SETTINGS_DIALOG, false, true)) {
-                        SettingsDialog.show(ctx, state)
+                    if (state.fields.compareAndSetField(ctx, FieldStore.SETTINGS_DIALOG, false, true)) {
+                        try {
+                            SettingsDialog.show(ctx, state)
+                        } catch (e: Throwable) {
+                            state.fields.removeField(ctx, FieldStore.SETTINGS_DIALOG)
+                            throw e
+                        }
                     }
                     return@Hooker true
                 }
-                chain.proceed()
             } catch (e: Throwable) {
                 Log.w(TAG, "pullDown interceptor failed", e)
-                chain.proceed()
             }
+            chain.proceed()
         }
     }
     private fun containsSettingsText(view: View, depth: Int = 0): Boolean {

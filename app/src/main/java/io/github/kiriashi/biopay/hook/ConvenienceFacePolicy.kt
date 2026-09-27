@@ -16,22 +16,14 @@
  * You should have received a copy of the GNU Affero General Public License
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
+package io.github.kiriashi.biopay.hook
 
-package io.github.kiriashi.biopay.core.util
+/** Bitmask values and conversion match the verified FaceBiometricFix APK. */
+internal object ConvenienceFacePolicy {
+    const val CONVENIENCE = 0x0fff
+    const val STRONG = 0x000f
+    const val PROPERTY_STRONG = 2
 
-import android.app.Activity
-import android.content.Context
-import android.content.ContextWrapper
-
-fun Context.findActivity(): Activity? {
-    if (this is Activity) return this
-    var context = this
-    val visited = java.util.Collections.newSetFromMap(java.util.IdentityHashMap<Context, Boolean>())
-    while (visited.add(context)) {
-        if (context is Activity) return context
-        context = (context as? ContextWrapper)?.baseContext ?: return null
-    }
-    return null
+    fun currentStrength(original: Int): Int =
+        if (original >= CONVENIENCE) STRONG else original
 }
-
-fun Context.isValidActivity(): Boolean = findActivity()?.let { !it.isFinishing && !it.isDestroyed } == true

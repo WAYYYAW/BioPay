@@ -19,7 +19,7 @@
 package io.github.kiriashi.biopay.payment
 
 import io.github.kiriashi.biopay.lifecycle.AppState
-import android.app.Activity
+import io.github.kiriashi.biopay.core.util.findActivity
 import android.view.View
 import android.view.ViewGroup
 import java.util.WeakHashMap
@@ -31,9 +31,7 @@ object KeyboardCloak {
     private val concealedWindowLock = Any()
     private val concealedWindowStates = WeakHashMap<View, Float>()
     fun reset() {
-        synchronized(cloakedLock) {
-            cloakedStates = null
-        }
+        restoreCloakedViews()
         restoreConcealedInputViews()
     }
     fun cloakKeyboardViews(keyboardView: ViewGroup) {
@@ -44,24 +42,30 @@ object KeyboardCloak {
             cloakedStates = states
         }
     }
-    fun uncloakKeyboardViews(keyboardView: ViewGroup) {
+    fun uncloakKeyboardViews(@Suppress("UNUSED_PARAMETER") keyboardView: ViewGroup) = restoreCloakedViews()
+
+    private fun restoreCloakedViews() {
         val states = synchronized(cloakedLock) {
             val s = cloakedStates
             cloakedStates = null
             s
         } ?: return
-        restoreRecursive(keyboardView, states)
+        for ((view, alpha) in states) {
+            view.animate().cancel()
+            view.alpha = alpha
+        }
     }
     fun concealActivityWindow(state: AppState) {
         val editText = state.session.getInputEditText() ?: return
         val currentKeyboard = state.session.getCurrentKeyboardView()
         synchronized(concealedWindowLock) {
-            val activity = currentKeyboard?.context?.let(::findActivity)
-                ?: findActivity(editText.context)
+            val activity = currentKeyboard?.context?.findActivity()
+                ?: editText.context.findActivity()
             activity?.window?.decorView?.let { decorView ->
                 if (!concealedWindowStates.containsKey(decorView)) {
                     concealedWindowStates[decorView] = decorView.alpha
                 }
+                decorView.animate().cancel()
                 decorView.alpha = 0f
             }
         }
@@ -73,6 +77,7 @@ object KeyboardCloak {
             concealedWindowStates.clear()
         }
         for ((view, alpha) in states) {
+            view.animate().cancel()
             if (animated && view.isAttachedToWindow) {
                 view.animate()
                     .alpha(alpha)
@@ -83,30 +88,13 @@ object KeyboardCloak {
             }
         }
     }
-    private fun findActivity(context: android.content.Context): Activity? {
-        var current = context
-        while (current is android.content.ContextWrapper) {
-            if (current is Activity) return current
-            val base = current.baseContext
-            if (base === current) break
-            current = base
-        }
-        return current as? Activity
-    }
     private fun saveAndCloakRecursive(view: View, states: MutableMap<View, Float>) {
         states[view] = view.alpha
+        view.animate().cancel()
         view.alpha = 0f
         if (view is ViewGroup) {
             for (i in 0 until view.childCount) {
                 saveAndCloakRecursive(view.getChildAt(i), states)
-            }
-        }
-    }
-    private fun restoreRecursive(view: View, states: Map<View, Float>) {
-        states[view]?.let { view.alpha = it }
-        if (view is ViewGroup) {
-            for (i in 0 until view.childCount) {
-                restoreRecursive(view.getChildAt(i), states)
             }
         }
     }

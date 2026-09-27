@@ -33,8 +33,8 @@ android {
         applicationId = "io.github.kiriashi.biopay"
         minSdk = 28
         targetSdk = 35
-        versionCode = 260920
-        versionName = "1.0.0"
+        versionCode = 260930
+        versionName = "1.1.0"
     }
 
     signingConfigs {
@@ -83,4 +83,5 @@ android {
 dependencies {
     compileOnly("io.github.libxposed:api:102.0.0")
     testImplementation("junit:junit:4.13.2")
+    testImplementation("io.github.libxposed:api:102.0.0")
 }

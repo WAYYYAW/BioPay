@@ -16,22 +16,21 @@
  * You should have received a copy of the GNU Affero General Public License
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
+package io.github.kiriashi.biopay.hook
 
-package io.github.kiriashi.biopay.core.util
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotNull
+import org.junit.Test
 
-import android.app.Activity
-import android.content.Context
-import android.content.ContextWrapper
-
-fun Context.findActivity(): Activity? {
-    if (this is Activity) return this
-    var context = this
-    val visited = java.util.Collections.newSetFromMap(java.util.IdentityHashMap<Context, Boolean>())
-    while (visited.add(context)) {
-        if (context is Activity) return context
-        context = (context as? ContextWrapper)?.baseContext ?: return null
+class SystemScopeTest {
+    @Test
+    fun packagedModernScopeTargetsSystemServerAndWeChat() {
+        val resource = javaClass.classLoader!!.getResourceAsStream("META-INF/xposed/scope.list")
+        assertNotNull("Module scope resource must be packaged", resource)
+        val scopes = resource!!.bufferedReader().use { reader ->
+            reader.readLines().filter { it.isNotBlank() }.toSet()
+        }
+        // Modern LSPosed treats android as UI processes, not system_server.
+        assertEquals(setOf("com.tencent.mm", "system"), scopes)
     }
-    return null
 }
-
-fun Context.isValidActivity(): Boolean = findActivity()?.let { !it.isFinishing && !it.isDestroyed } == true

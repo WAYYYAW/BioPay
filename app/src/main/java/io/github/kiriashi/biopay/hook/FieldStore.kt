@@ -28,7 +28,6 @@ class FieldStore {
 
     companion object {
         const val SETTINGS_DIALOG = "a"
-        const val BIOMETRIC_IN_PROGRESS = "c"
     }
 
     private val fields: MutableMap<Any, HashMap<String, Any>> = WeakHashMap()

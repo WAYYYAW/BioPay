@@ -11,6 +11,7 @@
 -keepclassmembers class * extends io.github.libxposed.api.XposedModule {
     public void onModuleLoaded(*);
     public void onPackageLoaded(*);
+    public void onSystemServerStarting(*);
     public boolean onHotReloading(*);
     public void onHotReloaded(*);
 }

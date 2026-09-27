@@ -49,13 +49,14 @@ class PreferencesStore(private val pref: SharedPreferences) {
         return pref.getString(PrefKeys.prefKeyPwd, "")
     }
 
-    fun savePassword(password: String, cipher: javax.crypto.Cipher, passwordVersion: Int): Result<Unit> {
+    fun savePassword(password: String, cipher: javax.crypto.Cipher, passwordVersion: Int, biometricType: Int = getBiometricType()): Result<Unit> {
         return try {
             val encrypted = KeystoreHelper.encrypt(password, cipher)
             pref.edit().apply {
                 putString(PrefKeys.prefKeyPwd, encrypted)
                 putBoolean(PrefKeys.prefKeyOn, true)
                 putInt(KEY_PASSWORD_VERSION, passwordVersion)
+                putInt(KEY_BIOMETRIC_TYPE, biometricType)
             }.apply()
             Result.success(Unit)
         } catch (e: Exception) {
@@ -69,11 +70,18 @@ class PreferencesStore(private val pref: SharedPreferences) {
             putBoolean(PrefKeys.prefKeyOn, false)
             putString(PrefKeys.prefKeyPwd, "")
             putInt(KEY_PASSWORD_VERSION, 0)
+            putInt(KEY_BIOMETRIC_TYPE, BiometricType.DISABLED)
         }.apply()
     }
 
     fun setBioPayEnabled(enabled: Boolean) {
         pref.edit().putBoolean(PrefKeys.prefKeyOn, enabled).apply()
+    }
+
+    fun setBiometricMode(type: Int) {
+        require(type in BiometricType.DISABLED..BiometricType.FACE)
+        pref.edit().putBoolean(PrefKeys.prefKeyOn, type != BiometricType.DISABLED)
+            .putInt(KEY_BIOMETRIC_TYPE, type).apply()
     }
 
     fun saveBiometricType(type: Int) {

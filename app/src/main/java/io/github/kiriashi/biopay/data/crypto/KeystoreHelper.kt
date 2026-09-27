@@ -32,7 +32,7 @@ import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
 import javax.crypto.spec.GCMParameterSpec
 
-/** Keeps the payment password behind a user-authenticated Keystore key. */
+/** Encrypts the password with Keystore; biometric authorization is enforced by the payment flow. */
 object KeystoreHelper {
 
     const val PASSWORD_LENGTH = 6
@@ -46,8 +46,8 @@ object KeystoreHelper {
 
     private val keyAlias get() = PrefKeys.keystoreAlias + KEY_VERSION
     private val keyStoreLock = Any()
-    private var keyStore: KeyStore? = null
-    private var secretKey: SecretKey? = null
+    @Volatile private var keyStore: KeyStore? = null
+    @Volatile private var secretKey: SecretKey? = null
 
     data class DecryptOperation(
         val cipher: Cipher,
@@ -99,7 +99,7 @@ object KeystoreHelper {
     }
 
     fun encrypt(plainText: String, cipher: Cipher): String {
-        require(plainText.length == PASSWORD_LENGTH) { "Invalid password length" }
+        require(plainText.length == PASSWORD_LENGTH && plainText.all { it in '0'..'9' }) { "Invalid password length" }
         val bytes = plainText.toByteArray(Charsets.UTF_8)
         return try {
             val encrypted = cipher.doFinal(bytes)
@@ -133,6 +133,7 @@ object KeystoreHelper {
         var bytes: ByteArray? = null
         return try {
             bytes = operation.cipher.doFinal(operation.ciphertext)
+            if (bytes.size != PASSWORD_LENGTH || bytes.any { it.toInt() !in 48..57 }) return null
             CharArray(bytes.size) { i -> (bytes!![i].toInt() and 0xff).toChar() }
         } catch (e: Throwable) {
             Log.w(TAG, "password decryption failed", e)

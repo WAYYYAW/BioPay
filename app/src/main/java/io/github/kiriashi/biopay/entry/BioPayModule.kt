@@ -22,6 +22,7 @@ package io.github.kiriashi.biopay.entry
 import io.github.kiriashi.biopay.core.log.LOG_TAG
 import io.github.kiriashi.biopay.core.log.LogCapture
 import io.github.kiriashi.biopay.hook.HookManager
+import io.github.kiriashi.biopay.hook.ConvenienceFaceHook
 import io.github.kiriashi.biopay.payment.BiometricPaymentController
 import android.app.Application
 import android.util.Log
@@ -30,18 +31,33 @@ import io.github.libxposed.api.XposedModuleInterface.HotReloadedParam
 import io.github.libxposed.api.XposedModuleInterface.HotReloadingParam
 import io.github.libxposed.api.XposedModuleInterface.ModuleLoadedParam
 import io.github.libxposed.api.XposedModuleInterface.PackageLoadedParam
+import io.github.libxposed.api.XposedModuleInterface.SystemServerStartingParam
 
 class BioPayModule : XposedModule() {
 
-    private val wiring = AppWiring()
+    private val wiring by lazy { AppWiring() }
+    private val convenienceFaceHook = ConvenienceFaceHook()
     private val initLock = Any()
     @Volatile private var initializedApplication: Application? = null
+    private var systemServer = false
+    private var lifecycleCallbacks: AppLifecycleCallbacks? = null
 
     override fun onModuleLoaded(param: ModuleLoadedParam) {
-        wiring.onModuleLoaded()
+        systemServer = param.isSystemServer
+    }
+
+    override fun onSystemServerStarting(param: SystemServerStartingParam) {
+        systemServer = true
+        log(Log.INFO, LOG_TAG, "Class 1 face: system_server starting")
+        convenienceFaceHook.register(param.classLoader, this)
     }
 
     override fun onPackageLoaded(param: PackageLoadedParam) {
+        if (param.packageName == "system" && systemServer) {
+            // Retry missing hooks when the framework delivers the system package callback.
+            convenienceFaceHook.register(param.defaultClassLoader, this)
+            return
+        }
         if (param.packageName != "com.tencent.mm") {
             return
         }
@@ -56,9 +72,20 @@ class BioPayModule : XposedModule() {
         hookApplicationOnCreate()
     }
 
-    override fun onHotReloading(param: HotReloadingParam): Boolean = true
+    override fun onHotReloading(param: HotReloadingParam): Boolean {
+        if (systemServer) return false
+        initializedApplication?.let { app ->
+            lifecycleCallbacks?.let(app::unregisterActivityLifecycleCallbacks)
+            LogCapture.stop(app) { }
+        }
+        lifecycleCallbacks = null
+        BiometricPaymentController.reset()
+        wiring.destroy()
+        return true
+    }
 
     override fun onHotReloaded(param: HotReloadedParam) {
+        if (systemServer) return
         val app = try {
             Class.forName("android.app.ActivityThread")
                 .getDeclaredMethod("currentApplication")
@@ -73,6 +100,9 @@ class BioPayModule : XposedModule() {
             val state = wiring.init(app)
             HookManager.replaceHooksFromOldGeneration(param.oldHookHandles, state)
             BiometricPaymentController.reset()
+            initializedApplication = app
+            lifecycleCallbacks = AppLifecycleCallbacks(state).also(app::registerActivityLifecycleCallbacks)
+            if (state.prefs.isLogCaptureEnabled()) LogCapture.start(app)
             Log.d(LOG_TAG, "hot reload: hooks replaced successfully")
         } else {
             Log.w(LOG_TAG, "hot reload: no Application available, hooks not replaced")
@@ -101,7 +131,8 @@ class BioPayModule : XposedModule() {
                             if (shouldInitialize) {
                                 val state = wiring.init(application)
                                 HookManager.init(application.classLoader, module, state)
-                                application.registerActivityLifecycleCallbacks(AppLifecycleCallbacks(state))
+                                lifecycleCallbacks = AppLifecycleCallbacks(state)
+                                    .also(application::registerActivityLifecycleCallbacks)
                                 if (state.prefs.isLogCaptureEnabled()) {
                                     LogCapture.start(application)
                                 }

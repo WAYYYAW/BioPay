@@ -24,23 +24,19 @@ import io.github.kiriashi.biopay.data.prefs.PreferencesStore
 import io.github.kiriashi.biopay.hook.FieldStore
 import io.github.kiriashi.biopay.lifecycle.AppState
 import io.github.kiriashi.biopay.payment.PaymentSession
+import io.github.kiriashi.biopay.payment.BiometricPaymentController
 import android.app.Application
 import android.content.Context
 
 /** Composition root: builds the per-app collaborator graph once. */
 class AppWiring {
 
-    private val session = PaymentSession()
+    private val session = PaymentSession(onDestroy = BiometricPaymentController::reset)
     private val fields = FieldStore()
     private var appState: AppState? = null
 
-    fun onModuleLoaded() {
-        session.startCleanup()
-    }
-
     fun init(application: Application): AppState {
         val prefs = PreferencesStore(application.getSharedPreferences(PrefKeys.prefName, Context.MODE_PRIVATE))
-        session.startCleanup()
         return AppState(application, prefs, session, fields).also { appState = it }
     }
 

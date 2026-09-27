@@ -18,27 +18,47 @@
  */
 package io.github.kiriashi.biopay.settings
 
-import android.app.Activity
 import android.app.AlertDialog
 import android.content.Context
+import io.github.kiriashi.biopay.core.util.isValidActivity
 import android.view.View
+import android.os.CancellationSignal
+import io.github.kiriashi.biopay.payment.SessionToken
 
 class DialogHost(context: Context) {
-        private val contextRef = java.lang.ref.WeakReference(context)
-        private var dialog: AlertDialog? = null
-        var onDismiss: (() -> Unit)? = null
-        private val ctx get() = contextRef.get()
-        fun show(content: View) {
-            val c = ctx ?: return
-            if (c is Activity && (c.isFinishing || c.isDestroyed)) return
-            dialog = AlertDialog.Builder(c).setView(content).setCancelable(false).create()
-            dialog?.setOnDismissListener { onDismiss?.invoke() }
-            dialog?.window?.setBackgroundDrawableResource(android.R.color.transparent)
-            dialog?.show()
-        }
-        fun dismiss() {
-            val c = ctx ?: return
-            if (c is Activity && (c.isFinishing || c.isDestroyed)) return
-            dialog?.let { if (it.isShowing) it.dismiss() }
-        }
+    private val contextRef = java.lang.ref.WeakReference(context)
+    private var dialog: AlertDialog? = null
+    private val authentication = SessionToken()
+    private var signal: CancellationSignal? = null
+    fun beginAuthentication(newSignal: CancellationSignal): Long {
+        cancelAuthentication()
+        signal = newSignal
+        return authentication.begin()
     }
+    fun finishAuthentication(id: Long): Boolean {
+        if (!authentication.finish(id)) return false
+        signal = null
+        return true
+    }
+    private fun cancelAuthentication() {
+        authentication.invalidate()
+        val previous = signal
+        signal = null
+        previous?.cancel()
+    }
+    var onDismiss: (() -> Unit)? = null
+    private val ctx get() = contextRef.get()
+    fun show(content: View) {
+        val c = ctx ?: return
+        if (!c.isValidActivity()) return
+        dialog = AlertDialog.Builder(c).setView(content).setCancelable(false).create()
+        dialog?.setOnDismissListener { cancelAuthentication(); dialog = null; onDismiss?.invoke() }
+        dialog?.window?.setBackgroundDrawableResource(android.R.color.transparent)
+        dialog?.show()
+    }
+    fun dismiss() {
+        cancelAuthentication()
+        dialog?.let { if (it.isShowing) it.dismiss() }
+        dialog = null
+    }
+}

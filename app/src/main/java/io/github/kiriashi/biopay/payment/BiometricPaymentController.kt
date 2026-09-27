@@ -21,7 +21,6 @@ package io.github.kiriashi.biopay.payment
 import io.github.kiriashi.biopay.core.log.LOG_TAG
 import io.github.kiriashi.biopay.core.log.LogCapture
 import io.github.kiriashi.biopay.data.crypto.PasswordVersionPolicy
-import io.github.kiriashi.biopay.hook.FieldStore
 import io.github.kiriashi.biopay.lifecycle.AppState
 import android.util.Log
 import android.view.View
@@ -44,7 +43,7 @@ object BiometricPaymentController {
         }
 
         val (sessionId, shouldTrigger) = synchronized(setupLock) {
-            val alreadyInProgress = state.fields.hasField(keyboardView.context, FieldStore.BIOMETRIC_IN_PROGRESS)
+            val alreadyInProgress = state.session.isAuthenticationInProgress() || PasswordAutoInput.isInProgress(state.session.currentSessionId())
             val id = if (alreadyInProgress) state.session.currentSessionId() else state.session.beginSession()
             removeListenersFromOldView()
 
@@ -63,27 +62,11 @@ object BiometricPaymentController {
             id to !alreadyInProgress
         }
 
+        val listener = synchronized(attachLock) { attachListener } ?: return
+        keyboardView.addOnAttachStateChangeListener(listener)
+        synchronized(attachLock) { attachedViewRef = WeakReference(keyboardView) }
         if (shouldTrigger) {
-            Log.d(TAG, "setupBiometricAuth: no biometric in progress, triggering")
-            LogCapture.log("setup: triggering auth, view=${keyboardView.hashCode()}")
-            if (BiometricGate.triggerBiometricAuth(keyboardView, encodedPassword, state, sessionId)) {
-                val listener = synchronized(attachLock) { attachListener } ?: return
-                keyboardView.addOnAttachStateChangeListener(listener)
-                synchronized(attachLock) {
-                    attachedViewRef = WeakReference(keyboardView)
-                }
-                Log.d(TAG, "setupBiometricAuth: listener added, view=${keyboardView.hashCode()}")
-            }
-        } else {
-            val listener = synchronized(attachLock) { attachListener }
-            if (listener != null) {
-                keyboardView.addOnAttachStateChangeListener(listener)
-                synchronized(attachLock) {
-                    attachedViewRef = WeakReference(keyboardView)
-                }
-            }
-            Log.d(TAG, "setupBiometricAuth: biometric in progress, skipping trigger. newView=${keyboardView.hashCode()}")
-            LogCapture.log("setup: in progress, skip. newView=${keyboardView.hashCode()}")
+            BiometricGate.triggerBiometricAuth(keyboardView, encodedPassword, state, sessionId)
         }
     }
 
@@ -92,7 +75,9 @@ object BiometricPaymentController {
             val keyboardView = state.session.getCurrentKeyboardView() ?: return
             val encodedPassword = state.session.getCurrentEncodedPassword() ?: return
 
-            if (!state.fields.hasField(keyboardView.context, FieldStore.BIOMETRIC_IN_PROGRESS)) {
+            if (state.session.isAuthenticationInProgress()) {
+                BiometricGate.cancelAuthentication(state)
+            } else if (!PasswordAutoInput.isInProgress(state.session.currentSessionId())) {
                 BiometricGate.triggerBiometricAuth(keyboardView, encodedPassword, state, state.session.currentSessionId())
             }
         } catch (e: Throwable) {
@@ -122,7 +107,7 @@ object BiometricPaymentController {
         }
     }
 
-private class KeyboardAttachListener(private val state: AppState) : View.OnAttachStateChangeListener {
+    private class KeyboardAttachListener(private val state: AppState) : View.OnAttachStateChangeListener {
         private var keyboardViewRef: WeakReference<ViewGroup>? = null
         var keyboardView: ViewGroup?
             get() = keyboardViewRef?.get()
@@ -131,7 +116,8 @@ private class KeyboardAttachListener(private val state: AppState) : View.OnAttac
 
         override fun onViewAttachedToWindow(view: View) {
             keyboardView?.let { kv ->
-                if (!state.fields.hasField(kv.context, FieldStore.BIOMETRIC_IN_PROGRESS)) {
+                if (state.session.isCurrentSession(sessionId) && state.prefs.isBioPayEnabled() &&
+                    !state.session.isAuthenticationInProgress() && !PasswordAutoInput.isInProgress(sessionId)) {
                     val encoded = state.prefs.getEncodedPassword()
                     if (!encoded.isNullOrEmpty()) {
                         Log.d(TAG, "onViewAttached: triggering auth, view=${kv.hashCode()}")
@@ -152,7 +138,7 @@ private class KeyboardAttachListener(private val state: AppState) : View.OnAttac
             KeyboardCloak.uncloakKeyboardViews(detachedView)
             PasswordAutoInput.cancelPendingRunnables()
 
-            if (state.fields.hasField(detachedView.context, FieldStore.BIOMETRIC_IN_PROGRESS)) {
+            if (state.session.isAuthenticationInProgress()) {
                 // Some external payment Activities recreate the keyboard when it is hidden.
                 // Keep the session alive so the authentication callback can use the new view.
                 Log.d(TAG, "onViewDetached: keeping payment session during biometric auth, view=${detachedView.hashCode()}")
@@ -166,7 +152,6 @@ private class KeyboardAttachListener(private val state: AppState) : View.OnAttac
             state.session.setInPaymentMode(false)
             state.session.setCurrentKeyboardView(null)
             state.session.setCurrentEncodedPassword(null)
-            state.fields.removeField(detachedView.context, FieldStore.BIOMETRIC_IN_PROGRESS)
             state.session.endSession(sessionId)
             keyboardView = null
             sessionId = 0L

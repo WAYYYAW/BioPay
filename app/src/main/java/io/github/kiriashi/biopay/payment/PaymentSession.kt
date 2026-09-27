@@ -28,11 +28,15 @@ import android.view.ViewGroup
 import android.widget.EditText
 import java.lang.ref.WeakReference
 import java.util.concurrent.atomic.AtomicBoolean
+import io.github.kiriashi.biopay.core.util.findActivity
 
-class PaymentSession {
+class PaymentSession(private val onDestroy: () -> Unit = {}) {
 
     private val isInPaymentMode = AtomicBoolean(false)
     private val sessionToken = SessionToken()
+    private val authenticationToken = SessionToken()
+
+    data class AuthenticationAttempt(val id: Long, val signal: CancellationSignal)
 
     @Volatile
     private var cancelSignal: CancellationSignal? = null
@@ -72,7 +76,10 @@ class PaymentSession {
     fun isInPaymentMode(): Boolean = isInPaymentMode.get()
 
     fun beginSession(): Long {
+        sessionToken.invalidate()
+        onDestroy()
         cancelCurrentSignal()
+        startCleanup()
         return sessionToken.begin()
     }
 
@@ -86,7 +93,7 @@ class PaymentSession {
 
     fun endSessionForActivity(activity: Activity) {
         val view = currentKeyboardViewRef?.get()
-        if (view?.context === activity) destroy()
+        if (view?.context?.findActivity() === activity) destroy()
     }
 
     fun setInPaymentMode(value: Boolean) {
@@ -119,34 +126,38 @@ class PaymentSession {
         return inputEditTextRef?.get()
     }
 
-    fun createNewSignal(): CancellationSignal {
+    fun isCurrentAuthentication(id: Long): Boolean = authenticationToken.isCurrent(id)
+
+    fun isAuthenticationInProgress(): Boolean = authenticationToken.current() != 0L
+
+    fun beginAuthentication(): AuthenticationAttempt? {
         synchronized(signalLock) {
-            cancelSignal?.cancel()
-            cancelSignal = CancellationSignal()
-            return cancelSignal!!
+            if (isAuthenticationInProgress()) return null
+            val signal = CancellationSignal()
+            cancelSignal = signal
+            return AuthenticationAttempt(authenticationToken.begin(), signal)
         }
     }
 
+    fun finishAuthentication(id: Long): Boolean = synchronized(signalLock) {
+        if (!authenticationToken.finish(id)) return false
+        cancelSignal = null
+        true
+    }
+
     fun cancelCurrentSignal() {
-        synchronized(signalLock) {
-            val signal = cancelSignal
-            if (signal != null && !signal.isCanceled) {
-                signal.cancel()
-                cancelSignal = null
-            }
+        val signal = synchronized(signalLock) {
+            authenticationToken.invalidate()
+            cancelSignal.also { cancelSignal = null }
         }
+        signal?.cancel()
     }
 
     fun cleanupExpiredReferences() {
         val now = SystemClock.uptimeMillis()
 
-        if (currentKeyboardViewRef?.get() == null) {
-            currentKeyboardViewRef = null
-            inputEditTextRef = null
-            currentEncodedPassword = null
-            isInPaymentMode.set(false)
-            cancelCurrentSignal()
-        } else if (now - lastKeyboardAccessTime > 30_000) {
+        if (!isAuthenticationInProgress() &&
+            (currentKeyboardViewRef?.get() == null || now - lastKeyboardAccessTime > 30_000)) {
             destroy()
         }
 
@@ -156,15 +167,13 @@ class PaymentSession {
     }
 
     fun destroy() {
+        onDestroy()
         stopCleanup()
         sessionToken.invalidate()
         isInPaymentMode.set(false)
         currentKeyboardViewRef = null
         inputEditTextRef = null
         currentEncodedPassword = null
-        synchronized(signalLock) {
-            cancelSignal?.cancel()
-            cancelSignal = null
-        }
+        cancelCurrentSignal()
     }
 }

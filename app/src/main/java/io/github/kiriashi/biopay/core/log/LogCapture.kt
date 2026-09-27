@@ -28,8 +28,6 @@ import io.github.kiriashi.biopay.BuildConfig
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Locale
-import java.util.concurrent.CountDownLatch
-import java.util.concurrent.TimeUnit
 
 object LogCapture {
 
@@ -46,8 +44,21 @@ object LogCapture {
 
     private val flushRunnable = object : Runnable {
         override fun run() {
-            bgHandler?.post { flushToDisk() }
-            if (running) handler.postDelayed(this, flushInterval)
+            synchronized(lock) {
+                if (!running) return
+                val dir = outputDir ?: return
+                val file = File(dir, "biopay_log.txt")
+                val content = ring.snapshot()
+                bgHandler?.post {
+                    try {
+                        file.parentFile?.mkdirs()
+                        LogFileWriter.writeAtomically(file, content)
+                    } catch (e: Exception) {
+                        Log.e(LOG_TAG, "Failed to flush log to disk", e)
+                    }
+                }
+                handler.postDelayed(this, flushInterval)
+            }
         }
     }
 
@@ -75,45 +86,47 @@ object LogCapture {
         }
     }
 
-    fun stop(context: Context): String? {
-        if (!BuildConfig.DEBUG) return null
-        var flushLatch: CountDownLatch? = null
-        var threadToStop: HandlerThread? = null
+    fun stop(context: Context, onSaved: (String?) -> Unit) {
+        if (!BuildConfig.DEBUG) {
+            onSaved(null)
+            return
+        }
         synchronized(lock) {
-            if (!running) return null
+            if (!running) {
+                onSaved(null)
+                return
+            }
             running = false
             handler.removeCallbacks(flushRunnable)
             ring.appendRaw(LogFormat.footer(headerFormatter.get()!!.format(System.currentTimeMillis())))
-            bgHandler?.let { writer ->
-                val latch = CountDownLatch(1)
-                flushLatch = latch
-                writer.post {
-                    try {
-                        flushToDisk()
-                    } finally {
-                        latch.countDown()
-                    }
-                }
-            }
-            threadToStop = bgThread
-        }
-
-        flushLatch?.await(2, TimeUnit.SECONDS)
-
-        synchronized(lock) {
-            val path = saveToAppFiles(context)
+            val content = ring.snapshot()
+            val file = File(context.filesDir, "BioPay/" +
+                LogFormat.reportFileName(headerFormatter.get()!!.format(System.currentTimeMillis())))
+            val writer = bgHandler
+            val thread = bgThread
             ring.clear()
-            threadToStop?.quitSafely()
-            bgThread = null
             bgHandler = null
+            bgThread = null
             outputDir = null
-            Log.d(LOG_TAG, "LogCapture saved to: $path")
-            return path
+            if (writer == null || !writer.post {
+                    val path = try {
+                        file.parentFile?.mkdirs()
+                        LogFileWriter.writeAtomically(file, content)
+                        file.absolutePath
+                    } catch (e: Exception) {
+                        Log.e(LOG_TAG, "Failed to save log", e)
+                        null
+                    }
+                    handler.post { onSaved(path) }
+                }) {
+                handler.post { onSaved(null) }
+            }
+            thread?.quitSafely()
         }
     }
 
     internal fun log(msg: String) {
-        if (!BuildConfig.DEBUG) return
+        if (!BuildConfig.DEBUG || !running) return
         val time = timeFormatter.get()!!.format(System.currentTimeMillis())
         synchronized(lock) {
             if (!running) return
@@ -121,44 +134,4 @@ object LogCapture {
         }
     }
 
-    private fun getLogDir(context: Context): File {
-        val dir = File(context.filesDir, "BioPay")
-        if (!dir.exists()) dir.mkdirs()
-        return dir
-    }
-
-    private fun flushToDisk() {
-        val (content, generation) = synchronized(lock) {
-            ring.swap()
-        }
-        if (content.isEmpty()) return
-        try {
-            val dir = outputDir ?: return
-            if (!dir.exists()) dir.mkdirs()
-            LogFileWriter.writeAtomically(File(dir, "biopay_log.txt"), content)
-            synchronized(lock) {
-                ring.clearFlushed(generation)
-            }
-        } catch (e: Exception) {
-            Log.e(LOG_TAG, "Failed to flush log to disk", e)
-            synchronized(lock) {
-                ring.clearFlushed(generation)
-            }
-        }
-    }
-
-    private fun saveToAppFiles(context: Context): String? {
-        return try {
-            val dir = getLogDir(context)
-            val file = File(dir, LogFormat.reportFileName(headerFormatter.get()!!.format(System.currentTimeMillis())))
-            val content = synchronized(lock) {
-                ring.snapshot()
-            }
-            LogFileWriter.writeAtomically(file, content)
-            file.absolutePath
-        } catch (e: Throwable) {
-            Log.e(LOG_TAG, "Failed to save log", e)
-            null
-        }
-    }
 }
