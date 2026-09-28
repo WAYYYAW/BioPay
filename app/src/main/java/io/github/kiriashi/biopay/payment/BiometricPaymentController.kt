@@ -43,7 +43,9 @@ object BiometricPaymentController {
         }
 
         val (sessionId, shouldTrigger) = synchronized(setupLock) {
-            val alreadyInProgress = state.session.isAuthenticationInProgress() || PasswordAutoInput.isInProgress(state.session.currentSessionId())
+            val alreadyInProgress = state.session.isAuthenticationInProgress() ||
+                BiometricGate.isFaceInputPending(state.session.currentSessionId()) ||
+                PasswordAutoInput.isInProgress(state.session.currentSessionId())
             val id = if (alreadyInProgress) state.session.currentSessionId() else state.session.beginSession()
             removeListenersFromOldView()
 
@@ -75,7 +77,8 @@ object BiometricPaymentController {
             val keyboardView = state.session.getCurrentKeyboardView() ?: return
             val encodedPassword = state.session.getCurrentEncodedPassword() ?: return
 
-            if (state.session.isAuthenticationInProgress()) {
+            if (state.session.isAuthenticationInProgress() ||
+                BiometricGate.isFaceInputPending(state.session.currentSessionId())) {
                 BiometricGate.cancelAuthentication(state)
             } else if (!PasswordAutoInput.isInProgress(state.session.currentSessionId())) {
                 BiometricGate.triggerBiometricAuth(keyboardView, encodedPassword, state, state.session.currentSessionId())
@@ -86,6 +89,7 @@ object BiometricPaymentController {
     }
 
     fun reset() {
+        BiometricGate.cancelPendingFaceInput()
         PasswordAutoInput.cancelPendingRunnables()
         KeyboardCloak.reset()
         synchronized(attachLock) {
@@ -117,7 +121,9 @@ object BiometricPaymentController {
         override fun onViewAttachedToWindow(view: View) {
             keyboardView?.let { kv ->
                 if (state.session.isCurrentSession(sessionId) && state.prefs.isBioPayEnabled() &&
-                    !state.session.isAuthenticationInProgress() && !PasswordAutoInput.isInProgress(sessionId)) {
+                    !state.session.isAuthenticationInProgress() &&
+                    !BiometricGate.isFaceInputPending(sessionId) &&
+                    !PasswordAutoInput.isInProgress(sessionId)) {
                     val encoded = state.prefs.getEncodedPassword()
                     if (!encoded.isNullOrEmpty()) {
                         Log.d(TAG, "onViewAttached: triggering auth, view=${kv.hashCode()}")
@@ -138,11 +144,11 @@ object BiometricPaymentController {
             KeyboardCloak.uncloakKeyboardViews(detachedView)
             PasswordAutoInput.cancelPendingRunnables()
 
-            if (state.session.isAuthenticationInProgress()) {
-                // Some external payment Activities recreate the keyboard when it is hidden.
-                // Keep the session alive so the authentication callback can use the new view.
-                Log.d(TAG, "onViewDetached: keeping payment session during biometric auth, view=${detachedView.hashCode()}")
-                LogCapture.log("onViewDetached: keeping session during auth")
+            if (state.session.isAuthenticationInProgress() || BiometricGate.isFaceInputPending(sessionId)) {
+                // External payment Activities can recreate the keyboard while verification
+                // or the face input delay is in progress.
+                Log.d(TAG, "onViewDetached: keeping payment session, view=${detachedView.hashCode()}")
+                LogCapture.log("onViewDetached: keeping active session")
                 return
             }
 

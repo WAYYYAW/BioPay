@@ -19,6 +19,8 @@
 package io.github.kiriashi.biopay.payment
 
 import android.hardware.biometrics.BiometricPrompt
+import android.os.Handler
+import android.os.Looper
 import android.util.Log
 import android.view.View
 import android.view.ViewGroup
@@ -30,6 +32,36 @@ import io.github.kiriashi.biopay.data.crypto.KeystoreHelper
 import io.github.kiriashi.biopay.lifecycle.AppState
 
 object BiometricGate {
+    private const val FACE_INPUT_DELAY_MS = 1_000L
+    private val handler = Handler(Looper.getMainLooper())
+    private var pendingFaceInput: PendingFaceInput? = null
+
+    fun isFaceInputPending(sessionId: Long): Boolean = pendingFaceInput?.sessionId == sessionId
+
+    fun cancelPendingFaceInput() {
+        val pending = pendingFaceInput ?: return
+        pendingFaceInput = null
+        handler.removeCallbacks(pending)
+        pending.operation.ciphertext.fill(0)
+    }
+
+    private class PendingFaceInput(
+        val sessionId: Long,
+        val operation: KeystoreHelper.DecryptOperation,
+        val continueInput: () -> Unit
+    ) : Runnable {
+        override fun run() {
+            if (pendingFaceInput !== this) return
+            pendingFaceInput = null
+            try {
+                continueInput()
+            } catch (e: Throwable) {
+                operation.ciphertext.fill(0)
+                Log.w(LOG_TAG, "delayed face input failed", e)
+            }
+        }
+    }
+
     fun triggerBiometricAuth(
         keyboardView: ViewGroup,
         encodedPassword: String,
@@ -37,7 +69,7 @@ object BiometricGate {
         sessionId: Long
     ): Boolean {
         if (!state.session.isCurrentSession(sessionId) || !keyboardView.context.isValidActivity()) return false
-        if (PasswordAutoInput.isInProgress(sessionId)) return false
+        if (PasswordAutoInput.isInProgress(sessionId) || isFaceInputPending(sessionId)) return false
         val biometricType = state.prefs.getBiometricType()
         if (biometricType !in BiometricType.BOTH..BiometricType.FACE) return false
         val attempt = state.session.beginAuthentication() ?: return false
@@ -57,7 +89,7 @@ object BiometricGate {
                         restoreKeyboard(keyboardView, state, sessionId)
                     }
                 }
-            val callback = BiometricAuthCallback(keyboardView, operation, state, sessionId, attempt.id)
+            val callback = BiometricAuthCallback(keyboardView, operation, state, sessionId, attempt.id, biometricType)
             BiometricPromptPolicy.configure(builder, biometricType).build()
                 .authenticate(attempt.signal, executor, callback)
             if (!state.session.isCurrentAuthentication(attempt.id)) return false
@@ -77,8 +109,9 @@ object BiometricGate {
     }
 
     fun cancelAuthentication(state: AppState) {
-        val view = state.session.getCurrentKeyboardView() ?: return
+        cancelPendingFaceInput()
         state.session.cancelCurrentSignal()
+        val view = state.session.getCurrentKeyboardView() ?: return
         restoreKeyboard(view, state, state.session.currentSessionId())
     }
 
@@ -106,7 +139,8 @@ object BiometricGate {
         private val operation: KeystoreHelper.DecryptOperation,
         private val state: AppState,
         private val sessionId: Long,
-        private val attemptId: Long
+        private val attemptId: Long,
+        private val biometricType: Int
     ) : BiometricPrompt.AuthenticationCallback() {
         override fun onAuthenticationError(errorCode: Int, errString: CharSequence?) {
             operation.ciphertext.fill(0)
@@ -127,6 +161,39 @@ object BiometricGate {
                 return
             }
             LogCapture.log("onAuthSucceeded: attempt=$attemptId")
+            if (biometricType == BiometricType.FACE) {
+                cancelPendingFaceInput()
+                val pending = PendingFaceInput(sessionId, operation) {
+                    val currentView = state.session.getCurrentKeyboardView()
+                    if (!state.session.isCurrentSession(sessionId) ||
+                        !state.session.isInPaymentMode() ||
+                        state.prefs.getBiometricType() != BiometricType.FACE ||
+                        currentView?.isAttachedToWindow != true ||
+                        !currentView.context.isValidActivity()
+                    ) {
+                        operation.ciphertext.fill(0)
+                        if (state.session.isCurrentSession(sessionId)) {
+                            if (currentView?.isAttachedToWindow == true) {
+                                restoreKeyboard(currentView, state, sessionId)
+                            } else {
+                                state.session.endSession(sessionId)
+                            }
+                        }
+                        return@PendingFaceInput
+                    }
+                    finishInput()
+                }
+                pendingFaceInput = pending
+                if (!handler.postDelayed(pending, FACE_INPUT_DELAY_MS)) {
+                    cancelPendingFaceInput()
+                    restoreKeyboard(keyboardView, state, sessionId)
+                }
+                return
+            }
+            finishInput()
+        }
+
+        private fun finishInput() {
             var password: CharArray? = null
             try {
                 password = KeystoreHelper.decryptToCharArray(operation)

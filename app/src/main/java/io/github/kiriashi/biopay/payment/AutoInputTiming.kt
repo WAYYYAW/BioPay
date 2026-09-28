@@ -19,7 +19,7 @@
 
 package io.github.kiriashi.biopay.payment
 
-/** Human-like auto-input timing. Pure JVM: no Android dependencies. */
+/** Bounded variation between successive password digits. Pure JVM: no Android dependencies. */
 internal object AutoInputTiming {
 
     const val GAUSSIAN_MEAN_MS = 70.0

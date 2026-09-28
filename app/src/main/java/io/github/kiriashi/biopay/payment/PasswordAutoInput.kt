@@ -76,7 +76,7 @@ object PasswordAutoInput {
                            val state: AppState, val sessionId: Long) : Runnable {
         private var index = 0
         fun scheduleNext() {
-            val delay = if (index == keys.size) 250L else
+            val delay = if (index == 0) 0L else if (index == keys.size) 250L else
                 AutoInputTiming.gaussianDelay(ThreadLocalRandom.current().nextGaussian())
             handler.postAtTime(this, this, SystemClock.uptimeMillis() + delay)
         }
