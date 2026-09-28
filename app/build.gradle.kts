@@ -34,7 +34,7 @@ android {
         minSdk = 28
         targetSdk = 35
         versionCode = 260928
-        versionName = "1.2.2"
+        versionName = "1.2.3"
     }
 
     signingConfigs {
