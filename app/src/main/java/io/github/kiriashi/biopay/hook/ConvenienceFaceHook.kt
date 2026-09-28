@@ -23,111 +23,103 @@ import io.github.kiriashi.biopay.core.log.LOG_TAG
 import io.github.libxposed.api.XposedInterface
 import java.util.concurrent.atomic.AtomicBoolean
 
-/** Implements the three system strength hooks used by the verified FaceBiometricFix module. */
+/** Allows Class 1 face sensors in WeChat's Class 2 biometric preflight. */
 internal class ConvenienceFaceHook {
     private val installed = mutableSetOf<String>()
+    private val inWeChatFacePreflight = ThreadLocal<Boolean>()
 
     @Synchronized
     fun register(classLoader: ClassLoader, xposed: XposedInterface) {
-        fun install(
-            id: String,
-            className: String,
-            methodName: String,
-            parameterTypes: Array<Class<*>>,
-            hooker: XposedInterface.Hooker
-        ) {
-            if (id in installed) return
-            try {
-                val method = classLoader.loadClass(className)
-                    .getDeclaredMethod(methodName, *parameterTypes)
-                    .apply { isAccessible = true }
-                xposed.hook(method).setId(id).intercept(hooker)
-                installed.add(id)
-                xposed.log(Log.INFO, LOG_TAG, "Class 1 face: installed $className.$methodName")
-            } catch (e: Throwable) {
-                // A missing OEM method must not prevent installing the other two hooks.
-                xposed.log(Log.ERROR, LOG_TAG, "Class 1 face: failed $className.$methodName", e)
+        val preAuthClass = try {
+            classLoader.loadClass("com.android.server.biometrics.PreAuthInfo")
+        } catch (e: Throwable) {
+            xposed.log(Log.WARN, LOG_TAG, "Class 1 face: PreAuthInfo unavailable", e)
+            return
+        }
+        val sensorClass = try {
+            classLoader.loadClass("com.android.server.biometrics.BiometricSensor")
+        } catch (e: Throwable) {
+            xposed.log(Log.WARN, LOG_TAG, "Class 1 face: BiometricSensor unavailable", e)
+            return
+        }
+        val preflightMethod = preAuthClass.declaredMethods.singleOrNull { method ->
+            method.name == "getStatusForBiometricAuthenticator" &&
+                method.parameterTypes.count { it == String::class.java } == 1 &&
+                method.parameterTypes.count { it == sensorClass } == 1
+        }
+        if (preflightMethod == null) {
+            xposed.log(Log.WARN, LOG_TAG, "Class 1 face: preflight signature unavailable")
+            return
+        }
+        val packageIndex = preflightMethod.parameterTypes.indexOf(String::class.java)
+        val sensorIndex = preflightMethod.parameterTypes.indexOf(sensorClass)
+        val modalityField = try {
+            sensorClass.getDeclaredField("modality").apply { isAccessible = true }
+        } catch (e: Throwable) {
+            xposed.log(Log.WARN, LOG_TAG, "Class 1 face: modality field unavailable", e)
+            return
+        }
+        try {
+            val contextId = "bp_face_preflight_context"
+            if (contextId !in installed) {
+                preflightMethod.isAccessible = true
+                xposed.hook(preflightMethod).setId(contextId).intercept(XposedInterface.Hooker { chain ->
+                    // Keep the package and sensor context on this thread only during the preflight call.
+                    val previous = inWeChatFacePreflight.get()
+                    val sensor = chain.args.getOrNull(sensorIndex)
+                    val isFace = sensor != null &&
+                        runCatching { modalityField.getInt(sensor) == FACE_MODALITY }.getOrDefault(false)
+                    inWeChatFacePreflight.set(
+                        chain.args.getOrNull(packageIndex) == WECHAT_PACKAGE && isFace
+                    )
+                    try {
+                        chain.proceed()
+                    } finally {
+                        if (previous == null) inWeChatFacePreflight.remove()
+                        else inWeChatFacePreflight.set(previous)
+                    }
+                })
+                installed.add(contextId)
             }
+            // The preflight method may inline Utils.isAtLeastStrength on some ROMs.
+            if (!xposed.deoptimize(preflightMethod)) {
+                xposed.log(Log.WARN, LOG_TAG, "Class 1 face: preflight deoptimization unavailable")
+            }
+        } catch (e: Throwable) {
+            xposed.log(Log.ERROR, LOG_TAG, "Class 1 face: preflight hook failed", e)
+            return
         }
 
-        val currentStrengthHit = AtomicBoolean()
-        install(
-            "bp_face_current_strength",
-            "com.android.server.biometrics.BiometricSensor",
-            "getCurrentStrength",
-            emptyArray(),
-            XposedInterface.Hooker { chain ->
-                val original = chain.proceed()
-                if (original !is Int) return@Hooker original
-                val adjusted = ConvenienceFacePolicy.currentStrength(original)
-                if (adjusted != original && currentStrengthHit.compareAndSet(false, true)) {
-                    xposed.log(Log.INFO, LOG_TAG, "Class 1 face: getCurrentStrength $original -> $adjusted")
+        val comparisonId = "bp_face_strength_comparison"
+        if (comparisonId in installed) return
+        try {
+            val method = classLoader.loadClass("com.android.server.biometrics.Utils")
+                .getDeclaredMethod("isAtLeastStrength", Integer.TYPE, Integer.TYPE)
+                .apply { isAccessible = true }
+            val hit = AtomicBoolean()
+            xposed.hook(method).setId(comparisonId).intercept(XposedInterface.Hooker { chain ->
+                val sensor = chain.args.getOrNull(0) as? Int
+                val requested = chain.args.getOrNull(1) as? Int
+                if (inWeChatFacePreflight.get() == true && sensor != null && requested != null &&
+                    ConvenienceFacePolicy.allowsWeakRequest(sensor, requested)
+                ) {
+                    if (hit.compareAndSet(false, true)) {
+                        xposed.log(Log.INFO, LOG_TAG, "Class 1 face: WeChat face preflight accepted as Class 2")
+                    }
+                    true
+                } else {
+                    chain.proceed()
                 }
-                adjusted
-            }
-        )
-
-        val comparisonHit = AtomicBoolean()
-        install(
-            "bp_face_strength_comparison",
-            "com.android.server.biometrics.Utils",
-            "isAtLeastStrength",
-            arrayOf(Integer.TYPE, Integer.TYPE),
-            XposedInterface.Hooker { chain ->
-                if (comparisonHit.compareAndSet(false, true)) {
-                    xposed.log(Log.INFO, LOG_TAG, "Class 1 face: isAtLeastStrength intercepted")
-                }
-                // Match the working module: OEM and current-strength checks both pass.
-                true
-            }
-        )
-
-        val propertyHit = AtomicBoolean()
-        install(
-            "bp_face_property_strength",
-            "com.android.server.biometrics.Utils",
-            "authenticatorStrengthToPropertyStrength",
-            arrayOf(Integer.TYPE),
-            XposedInterface.Hooker { chain ->
-                if (propertyHit.compareAndSet(false, true)) {
-                    xposed.log(Log.INFO, LOG_TAG, "Class 1 face: property strength -> Strong (2)")
-                }
-                ConvenienceFacePolicy.PROPERTY_STRONG
-            }
-        )
-
-        if (installed.size == 3) {
-            xposed.log(Log.INFO, LOG_TAG, "Class 1 face: all 3 compatibility hooks installed")
-        } else {
-            xposed.log(Log.ERROR, LOG_TAG, "Class 1 face: only ${installed.size}/3 compatibility hooks installed")
+            })
+            installed.add(comparisonId)
+            xposed.log(Log.INFO, LOG_TAG, "Class 1 face: WeChat-only compatibility installed")
+        } catch (e: Throwable) {
+            xposed.log(Log.ERROR, LOG_TAG, "Class 1 face: strength comparison hook failed", e)
         }
-        deoptimizeCallers(classLoader, xposed)
     }
 
-    private fun deoptimizeCallers(classLoader: ClassLoader, xposed: XposedInterface) {
-        // Optional AOSP callers; their absence on an OEM ROM must not disable compatibility.
-        val callers = mapOf(
-            "com.android.server.biometrics.PreAuthInfo" to setOf(
-                "create", "getStatusForBiometricAuthenticator"
-            ),
-            "com.android.server.biometrics.BiometricSensor" to setOf("isStrongBiometric"),
-            "com.android.server.biometrics.AuthSession" to setOf("onAuthenticationSucceeded")
-        )
-        for ((className, names) in callers) {
-            val clazz = try {
-                classLoader.loadClass(className)
-            } catch (_: Throwable) {
-                continue
-            }
-            try {
-                clazz.declaredMethods.filter { it.name in names }.forEach {
-                    if (!xposed.deoptimize(it)) {
-                        xposed.log(Log.WARN, LOG_TAG, "Class 1 face: could not deoptimize $className.${it.name}")
-                    }
-                }
-            } catch (e: Throwable) {
-                xposed.log(Log.WARN, LOG_TAG, "Class 1 face: optional caller deoptimization failed for $className", e)
-            }
-        }
+    private companion object {
+        const val WECHAT_PACKAGE = "com.tencent.mm"
+        const val FACE_MODALITY = 8 // BiometricAuthenticator.TYPE_FACE
     }
 }

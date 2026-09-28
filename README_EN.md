@@ -73,11 +73,13 @@ If recognition fails, you can try again. BioPay assists with password entry; WeC
 
 ### Compatibility Setup for Weak Face Recognition
 
-Some manufacturers classify their face recognition sensors as **Class 1** (Convenience, value 4095), which prevents **BiometricPrompt** from using them. BioPay includes a biometric strength override. If face payment does not work on your device, also enable BioPay's **System Framework (system)** scope in LSPosed and **reboot your phone** to activate it.
+Some manufacturers classify their face recognition sensors as **Class 1** (Convenience, value 4095), which prevents **BiometricPrompt** from using them. During WeChat face authentication preflight, BioPay can let these sensors satisfy **Class 2** (Weak) requests while keeping them distinct from Class 3 fingerprint sensors. If face payment does not work on your device, also enable BioPay's **System Framework (system)** scope in LSPosed and **reboot your phone** to activate it.
 
 For fingerprint authentication and devices where face payment already works, only the WeChat scope is needed.
 
-Note: this compatibility feature changes how the system evaluates biometric strength and may affect other apps. It does not improve the face sensor's actual resistance to spoofing. Decide whether to enable it based on your device.
+Note: this compatibility feature accepts Class 1 face sensors for Class 2 requests only during WeChat face authentication preflight; it does not make them satisfy Class 3 requests. It does not improve the face sensor's actual resistance to spoofing. Decide whether to enable it based on your device.
+
+Thanks to the [FaceBiometricFix](https://github.com/WAYYYAW/FaceBiometricFix) project for the technical approach to Class 1 face compatibility.
 
 ## Everyday Use
 

@@ -18,12 +18,11 @@
  */
 package io.github.kiriashi.biopay.hook
 
-/** Bitmask values and conversion match the verified FaceBiometricFix APK. */
+/** Apply the compatibility exception only to a Class 1 sensor requested at Class 2. */
 internal object ConvenienceFacePolicy {
     const val CONVENIENCE = 0x0fff
-    const val STRONG = 0x000f
-    const val PROPERTY_STRONG = 2
+    const val WEAK = 0x00ff
 
-    fun currentStrength(original: Int): Int =
-        if (original >= CONVENIENCE) STRONG else original
+    fun allowsWeakRequest(reported: Int, requested: Int): Boolean =
+        reported == CONVENIENCE && requested == WEAK
 }

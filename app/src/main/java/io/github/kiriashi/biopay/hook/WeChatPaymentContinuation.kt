@@ -21,7 +21,7 @@ package io.github.kiriashi.biopay.hook
 import java.lang.reflect.Field
 import java.lang.reflect.Method
 
-/** Resolves the same page action as FingerPay, without retaining the Activity. */
+/** Locates the current WeChat page action without retaining its Activity. */
 internal object WeChatPaymentContinuation {
     fun resolve(activity: Any): (() -> Unit)? {
         val fragment = method(activity.javaClass, "topShowFragment").invoke(activity) ?: return null

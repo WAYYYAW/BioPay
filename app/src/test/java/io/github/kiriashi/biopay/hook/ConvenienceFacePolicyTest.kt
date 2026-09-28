@@ -23,27 +23,10 @@ import org.junit.Test
 
 class ConvenienceFacePolicyTest {
     @Test
-    fun convenienceSensorIsReportedAsStrong() {
-        assertEquals(0x000f, ConvenienceFacePolicy.currentStrength(0x0fff))
-    }
-
-    @Test
-    fun preservesExistingStrongAndWeakSensorMasks() {
-        for (strength in listOf(0x0001, 0x000f, 0x00ff, 0x0ffe)) {
-            assertEquals(strength, ConvenienceFacePolicy.currentStrength(strength))
-        }
-    }
-
-    @Test
-    fun includesHigherMasksAsTheWorkingModuleDoes() {
-        for (strength in listOf(0x1000, 0x7fff, Int.MAX_VALUE)) {
-            assertEquals(0x000f, ConvenienceFacePolicy.currentStrength(strength))
-        }
-    }
-
-    @Test
-    fun leavesNegativeOrEmptyResultsUnchanged() {
-        assertEquals(-1, ConvenienceFacePolicy.currentStrength(-1))
-        assertEquals(0, ConvenienceFacePolicy.currentStrength(0))
+    fun onlyConvenienceMeetsWeakRequestViaOverride() {
+        assertEquals(true, ConvenienceFacePolicy.allowsWeakRequest(0x0fff, 0x00ff))
+        assertEquals(false, ConvenienceFacePolicy.allowsWeakRequest(0x0fff, 0x000f))
+        assertEquals(false, ConvenienceFacePolicy.allowsWeakRequest(0x000f, 0x00ff))
+        assertEquals(false, ConvenienceFacePolicy.allowsWeakRequest(0x00ff, 0x00ff))
     }
 }

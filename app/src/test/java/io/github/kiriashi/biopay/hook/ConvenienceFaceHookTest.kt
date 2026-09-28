@@ -26,112 +26,109 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ConvenienceFaceHookTest {
-    class Sensor {
-        fun getCurrentStrength(): Int = 4095
+    class Sensor(val modality: Int)
+
+    class PreAuthInfo {
+        fun getStatusForBiometricAuthenticator(sensor: Sensor, packageName: String): Int = 1
     }
 
     class Utils {
         companion object {
             @JvmStatic fun isAtLeastStrength(sensor: Int, requested: Int): Boolean = sensor <= requested
-            @JvmStatic fun authenticatorStrengthToPropertyStrength(strength: Int): Int = strength
         }
     }
 
     private class Framework {
         val hooks = mutableMapOf<String, XposedInterface.Hooker>()
-        val logs = mutableListOf<String>()
-        var installationCount = 0
-        val xposed = proxy<XposedInterface> { _, method, args ->
+        val xposed = proxy<XposedInterface> { _, method, _ ->
             when (method.name) {
                 "hook" -> {
-                    installationCount++
                     var id = ""
-                    proxy<XposedInterface.HookBuilder> { builder, operation, arguments ->
+                    proxy<XposedInterface.HookBuilder> { builder, operation, args ->
                         when (operation.name) {
-                            "setId" -> { id = arguments!![0] as String; builder }
+                            "setId" -> { id = args!![0] as String; builder }
                             "intercept" -> {
-                                hooks[id] = arguments!![0] as XposedInterface.Hooker
-                                proxy<XposedInterface.HookHandle> { _, action, _ ->
-                                    if (action.name == "unhook") { hooks.remove(id); null }
-                                    else throw UnsupportedOperationException(action.name)
-                                }
+                                hooks[id] = args!![0] as XposedInterface.Hooker
+                                proxy<XposedInterface.HookHandle> { _, _, _ -> null }
                             }
                             else -> throw UnsupportedOperationException(operation.name)
                         }
                     }
                 }
-                "log" -> { logs.add(args!![2] as String); null }
                 "deoptimize" -> true
+                "log" -> null
                 else -> throw UnsupportedOperationException(method.name)
             }
         }
     }
 
-    private class ServerLoader(val classes: MutableMap<String, Class<*>>) : ClassLoader() {
+    private class ServerLoader(val classes: Map<String, Class<*>>) : ClassLoader() {
         override fun loadClass(name: String): Class<*> =
             classes[name] ?: throw ClassNotFoundException(name)
     }
 
-    private fun serverClasses() = mutableMapOf<String, Class<*>>(
-        "com.android.server.biometrics.BiometricSensor" to Sensor::class.java,
-        "com.android.server.biometrics.Utils" to Utils::class.java
-    )
+    private fun loader(withPreAuth: Boolean = true) = ServerLoader(buildMap {
+        if (withPreAuth) put("com.android.server.biometrics.PreAuthInfo", PreAuthInfo::class.java)
+        put("com.android.server.biometrics.BiometricSensor", Sensor::class.java)
+        put("com.android.server.biometrics.Utils", Utils::class.java)
+    })
+
+    private fun chain(args: Array<Any>, proceed: () -> Any?): XposedInterface.Chain =
+        proxy { _, method, _ ->
+            when (method.name) {
+                "getArgs" -> args
+                "proceed" -> proceed()
+                else -> throw UnsupportedOperationException(method.name)
+            }
+        }
 
     @Test
-    fun installsAllThreeHooksWithoutPreAuthInfoOrSensorFields() {
+    fun onlyWeChatFacePreflightCanAcceptClassTwo() {
         val framework = Framework()
-        ConvenienceFaceHook().register(ServerLoader(serverClasses()), framework.xposed)
-        assertEquals(3, framework.hooks.size)
-        assertTrue(framework.logs.any { it.contains("all 3 compatibility hooks installed") })
-        var originalCalls = 0
-        val originalResult = proxy<XposedInterface.Chain> { _, method, _ ->
-            if (method.name == "proceed") { originalCalls++; 4095 }
-            else throw UnsupportedOperationException(method.name)
-        }
-        assertEquals(15, framework.hooks.getValue("bp_face_current_strength").intercept(originalResult))
-        assertEquals(1, originalCalls)
-        val noOriginal = proxy<XposedInterface.Chain> { _, method, _ ->
-            throw AssertionError("replacement must not invoke ${method.name}")
-        }
-        assertEquals(true, framework.hooks.getValue("bp_face_strength_comparison").intercept(noOriginal))
-        assertEquals(2, framework.hooks.getValue("bp_face_property_strength").intercept(noOriginal))
+        val hook = ConvenienceFaceHook()
+        hook.register(loader(), framework.xposed)
+        hook.register(loader(), framework.xposed)
+        assertEquals(setOf("bp_face_preflight_context", "bp_face_strength_comparison"), framework.hooks.keys)
+        val context = framework.hooks.getValue("bp_face_preflight_context")
+        val comparison = framework.hooks.getValue("bp_face_strength_comparison")
+        fun check(sensor: Sensor, pkg: String, requested: Int): Boolean =
+            context.intercept(chain(arrayOf(sensor, pkg)) {
+                comparison.intercept(chain(arrayOf(0x0fff, requested)) { false }) as Boolean
+            }) as Boolean
+        assertEquals(true, check(Sensor(8), "com.tencent.mm", 0x00ff))
+        assertEquals(false, check(Sensor(8), "com.tencent.mm", 0x000f))
+        assertEquals(false, check(Sensor(2), "com.tencent.mm", 0x00ff))
+        assertEquals(false, check(Sensor(8), "com.example.app", 0x00ff))
+        assertEquals(false, comparison.intercept(chain(arrayOf(0x0fff, 0x00ff)) { false }))
     }
 
     @Test
-    fun packageCallbackRetriesOnlyMissingHooks() {
+    fun contextIsRestoredAfterFailure() {
         val framework = Framework()
-        val classes = serverClasses().also { it.remove("com.android.server.biometrics.Utils") }
-        val loader = ServerLoader(classes)
-        val compatibility = ConvenienceFaceHook()
-        compatibility.register(loader, framework.xposed)
-        assertEquals(setOf("bp_face_current_strength"), framework.hooks.keys)
-        assertTrue(framework.logs.any { it.contains("only 1/3") })
-        classes["com.android.server.biometrics.Utils"] = Utils::class.java
-        compatibility.register(loader, framework.xposed)
-        compatibility.register(loader, framework.xposed)
-        assertEquals(3, framework.hooks.size)
-        assertEquals(3, framework.installationCount)
-    }
-
-    @Test
-    fun currentStrengthHookPreservesOriginalFailures() {
-        val framework = Framework()
-        ConvenienceFaceHook().register(ServerLoader(serverClasses()), framework.xposed)
-        val failure = IllegalStateException("sensor unavailable")
-        val chain = proxy<XposedInterface.Chain> { _, _, _ -> throw failure }
+        ConvenienceFaceHook().register(loader(), framework.xposed)
+        val context = framework.hooks.getValue("bp_face_preflight_context")
         try {
-            framework.hooks.getValue("bp_face_current_strength").intercept(chain)
-            throw AssertionError("expected original failure")
-        } catch (e: IllegalStateException) {
-            assertTrue(e === failure)
-        }
+            context.intercept(chain(arrayOf(Sensor(8), "com.tencent.mm")) {
+                throw IllegalStateException("preflight failed")
+            })
+            throw AssertionError("expected failure")
+        } catch (_: IllegalStateException) {}
+        val comparison = framework.hooks.getValue("bp_face_strength_comparison")
+        assertEquals(false, comparison.intercept(chain(arrayOf(0x0fff, 0x00ff)) { false }))
+    }
+
+    @Test
+    fun unavailableContextCannotInstallGlobalOverride() {
+        val framework = Framework()
+        ConvenienceFaceHook().register(loader(withPreAuth = false), framework.xposed)
+        assertTrue(framework.hooks.isEmpty())
     }
 
     companion object {
         private inline fun <reified T> proxy(
             crossinline handler: (Any, Method, Array<out Any?>?) -> Any?
         ): T = Proxy.newProxyInstance(T::class.java.classLoader, arrayOf(T::class.java)) {
-                target, method, args -> handler(target, method, args)
+            target, method, args -> handler(target, method, args)
         } as T
     }
 }

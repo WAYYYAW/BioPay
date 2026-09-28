@@ -36,7 +36,7 @@ class FingerprintErrorRecoveryTest {
     }
 
     @Test
-    fun allFourFingerPayMessagesContinueTheirOwnActivity() {
+    fun allFourKnownMessagesContinueTheirOwnActivity() {
         val messages = listOf(
             chinese,
             "系統錯誤，可以刪除裝置上的指紋，重新加入後再度嘗試。如仍無法解決，請洽詢手機製造商。",

@@ -20,7 +20,7 @@ package io.github.kiriashi.biopay.hook
 
 import java.util.WeakHashMap
 
-/** Matches the four FingerPay 1.2.4 messages and continues once per Activity. */
+/** Suppresses known WeChat biometric error tips and tries to continue the active page once. */
 internal class FingerprintErrorRecovery(private val onFailure: (Throwable) -> Unit) {
     private val continuedActivities = WeakHashMap<Any, Boolean>()
 
@@ -51,7 +51,7 @@ internal class FingerprintErrorRecovery(private val onFailure: (Throwable) -> Un
             }
             onFailure(e)
         }
-        // Match FingerPay: even if continuation is unavailable, suppress this known tip.
+        // The tip is known; suppress it even when the page has no continuation action.
         return true
     }
 
