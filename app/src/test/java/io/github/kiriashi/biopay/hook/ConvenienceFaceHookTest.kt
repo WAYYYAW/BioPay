@@ -76,7 +76,7 @@ class ConvenienceFaceHookTest {
     private fun chain(args: Array<Any>, proceed: () -> Any?): XposedInterface.Chain =
         proxy { _, method, _ ->
             when (method.name) {
-                "getArgs" -> args
+                "getArgs" -> args.asList()
                 "proceed" -> proceed()
                 else -> throw UnsupportedOperationException(method.name)
             }
